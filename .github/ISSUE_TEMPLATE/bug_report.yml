@@ -1,0 +1,47 @@
+name: Bug report
+description: Something in Ingress Proxy isn't working as it should.
+labels: [bug, ingress_proxy]
+body:
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Home Assistant (Settings → About) and this integration ("version" in custom_components/ingress_proxy/manifest.json).
+      placeholder: Home Assistant 2026.9.4, integration 1.2.0
+    validations:
+      required: true
+  - type: input
+    id: app
+    attributes:
+      label: The app you're proxying
+      description: Its name and version, and how Home Assistant reaches it (container name, IP, host networking).
+      placeholder: Music Assistant 2.x, http://music-assistant:8095, same Docker network
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      description: The steps, if you know them.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      options:
+        - Adding or changing an app (the form)
+        - The panel (blank, error message, toolbar)
+        - "\"No valid session\" or 401"
+        - The app's pages or files don't load
+        - Logging in to the app
+        - Live updates (websockets)
+        - Something else
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Turn on debug logging for the integration, make it happen, then Settings → System → Logs, search for ingress_proxy. Remove tokens, cookies and anything private before pasting.
+      render: text

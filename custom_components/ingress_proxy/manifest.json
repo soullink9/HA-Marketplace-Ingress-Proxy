@@ -1,0 +1,20 @@
+{
+  "domain": "ingress_proxy",
+  "name": "Ingress Proxy",
+  "codeowners": [
+    "@soullink9"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "frontend",
+    "http",
+    "panel_custom",
+    "websocket_api"
+  ],
+  "documentation": "https://github.com/soullink9/HA-Marketplace-Ingress-Proxy",
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/soullink9/HA-Marketplace-Ingress-Proxy/issues",
+  "requirements": [],
+  "version": "1.2.0"
+}

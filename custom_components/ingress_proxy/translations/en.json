@@ -1,0 +1,88 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add an app",
+        "description": "Show an app's web page as a Home Assistant sidebar panel. Home Assistant fetches the page from the app, so the app only has to be reachable from Home Assistant, not from your browser.",
+        "data": {
+          "slug": "Slug",
+          "title": "Sidebar title",
+          "url": "App address",
+          "icon": "Sidebar icon",
+          "require_admin": "Administrators only",
+          "persist_login": "Remember the app's login in Home Assistant"
+        },
+        "data_description": {
+          "slug": "Lowercase letters, digits and underscores. It becomes the panel's address (a slug of music becomes /proxy-music) and can't be changed later.",
+          "url": "Where Home Assistant reaches the app, such as http://music-assistant:8095 or http://192.168.1.20:8095.",
+          "require_admin": "Leave on unless every Home Assistant user should be able to open this app.",
+          "persist_login": "Log in to the app once and stay logged in on every device. Everyone who can open the panel shares that login."
+        },
+        "sections": {
+          "advanced": {
+            "name": "Advanced",
+            "data": {
+              "keep_prefix": "Keep the /api/ingress_proxy/slug path",
+              "verify_ssl": "Verify the app's SSL certificate",
+              "headers": "Extra request headers",
+              "local_storage": "Browser storage entries"
+            },
+            "data_description": {
+              "keep_prefix": "Turn on for an app that is set up to live under that path. Most apps expect to be at /.",
+              "verify_ssl": "Only matters for an https address. Turn off for an app with a self-signed certificate.",
+              "headers": "Sent with every request to the app, one per line, such as Authorization: Bearer YOUR_TOKEN.",
+              "local_storage": "Written to the browser before the app loads, one per line, such as ma_access_token: YOUR_TOKEN. Anyone who can open the panel can read them."
+            }
+          }
+        }
+      },
+      "reconfigure": {
+        "title": "Change the app",
+        "description": "Change how this app is reached and shown. The slug stays the same.",
+        "data": {
+          "title": "Sidebar title",
+          "url": "App address",
+          "icon": "Sidebar icon",
+          "require_admin": "Administrators only",
+          "persist_login": "Remember the app's login in Home Assistant"
+        },
+        "data_description": {
+          "url": "Where Home Assistant reaches the app, such as http://music-assistant:8095 or http://192.168.1.20:8095.",
+          "require_admin": "Leave on unless every Home Assistant user should be able to open this app.",
+          "persist_login": "Log in to the app once and stay logged in on every device. Everyone who can open the panel shares that login."
+        },
+        "sections": {
+          "advanced": {
+            "name": "Advanced",
+            "data": {
+              "keep_prefix": "Keep the /api/ingress_proxy/slug path",
+              "verify_ssl": "Verify the app's SSL certificate",
+              "headers": "Extra request headers",
+              "local_storage": "Browser storage entries"
+            },
+            "data_description": {
+              "keep_prefix": "Turn on for an app that is set up to live under that path. Most apps expect to be at /.",
+              "verify_ssl": "Only matters for an https address. Turn off for an app with a self-signed certificate.",
+              "headers": "Sent with every request to the app, one per line, such as Authorization: Bearer YOUR_TOKEN.",
+              "local_storage": "Written to the browser before the app loads, one per line, such as ma_access_token: YOUR_TOKEN. Anyone who can open the panel can read them."
+            }
+          }
+        }
+      }
+    },
+    "error": {
+      "invalid_slug": "Use only lowercase letters, digits and underscores",
+      "slug_taken": "Another app already uses this slug",
+      "invalid_title": "Enter a title for the sidebar",
+      "invalid_url": "Enter an http:// or https:// address, without a query string",
+      "invalid_headers": "Extra request headers must be lines of name: value, with plain header names and no line breaks in the values",
+      "invalid_local_storage": "Browser storage entries must be lines of key: value",
+      "cannot_connect": "Home Assistant can't reach the app at that address",
+      "certificate": "The app's SSL certificate can't be verified. Turn off certificate verification under Advanced if it is self-signed."
+    },
+    "abort": {
+      "already_configured": "This app is already added",
+      "reconfigure_successful": "The app's settings are saved"
+    }
+  }
+}
