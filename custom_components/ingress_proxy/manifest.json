@@ -1,6 +1,9 @@
 {
   "domain": "ingress_proxy",
   "name": "Ingress Proxy",
+  "categories": [
+    "computers_network"
+  ],
   "codeowners": [
     "@soullink9"
   ],
