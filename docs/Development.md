@@ -1,6 +1,6 @@
 # Development
 
-How Ingress Proxy works inside. [CONTRIBUTING.md](../CONTRIBUTING.md) has the file map and how to run the tests.
+How Ingress Proxy works inside. [CONTRIBUTING.md](../CONTRIBUTING.md) has the file map and how to check a change.
 
 Unlike most integrations, Ingress Proxy has no coordinator and no entities: nothing is polled.
 Each config entry is one app, and what it adds to Home Assistant is a sidebar panel and a route on Home Assistant's
@@ -94,3 +94,20 @@ than using Home Assistant's shared one:
   an update uses the new element instead of failing to redefine the old one.
 - **The kept cookies' file format** is `{slug: {cookie name: value}}`. Keep it that way, or migrate it, so people stay
   logged in across updates.
+
+## Tests and releases: the files
+
+Gitea is the main copy of this repository; it push-mirrors to GitHub, the public copy people install from.
+
+| File | What it does |
+|---|---|
+| `.gitea/workflows/test.yml` | Runs every check on each push to Gitea (lint, the tests and building the zip, on Python 3.14, and the panel scripts on Node 20), with no actions downloaded from GitHub |
+| `.gitea/workflows/release.yml` | Publishes a release on Gitea (Run workflow button, or a pushed version tag); its tag then reaches GitHub through the push mirror |
+| `.github/workflows/release.yml` | Publishes the same release on GitHub when a version tag arrives there (or from its own Run workflow button): the copy the Marketplace installs from |
+| `.github/workflows/ci.yml` | GitHub's checks on every push: lint, the tests and Home Assistant's `hassfest` (which comes from GitHub, so it runs only there) |
+| `.github/workflows/validate.yml` | The Marketplace's own checks (the HACS action), which its catalog requires; GitHub only, for the same reason |
+| `scripts/release_notes.py` | Shared by both release workflows: checks the version, gives the release's title, writes the notes (install steps with the zip's address on GitHub, then the changelog section) |
+| `scripts/build_package.py` | Builds `dist/ingress_proxy.zip`, the same bytes every time, and checks it with `check_package.py` |
+| `scripts/check_package.py` | Checks the zip the way it gets installed: one `ingress_proxy/` folder, a manifest for that domain at the repository's version, the icon, exactly the integration's files |
+| `scripts/publish_gitea_release.py` | Creates or updates the Gitea release and uploads its files, through Gitea's API (standard library only) |
+| `tests/test_release.py` | Tests all four scripts, publishing against a fake Gitea server |

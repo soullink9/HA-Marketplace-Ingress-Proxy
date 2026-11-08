@@ -21,9 +21,14 @@ custom_components/ingress_proxy/
 ├── translations/     UI strings for the form (en.json)
 └── brand/            Icons (icon.png 256 px, icon@2x.png 512 px), drawn from docs/images/icon.svg
 tests/
+├── README.md            What each test checks
 ├── stubs.py             Stand-ins for Home Assistant (and aiohttp and voluptuous for test_integration.py)
 ├── test_integration.py  Everything that needs only Python: rules, cookies, sessions, form, set-up, the view's decisions
-└── test_live_proxy.py   Real HTTP and websockets through the real view, with a fake app (needs aiohttp)
+├── test_live_proxy.py   Real HTTP and websockets through the real view, with a fake app (needs aiohttp)
+└── test_release.py      The release scripts, publishing against a fake Gitea
+scripts/                 The release helpers both release workflows use (see Releasing)
+.gitea/workflows/        Tests and releases on Gitea, the main copy (no GitHub needed)
+.github/workflows/       GitHub's checks (hassfest, the Marketplace's) and its copy of each release
 ```
 
 ## Where to change what
@@ -47,13 +52,25 @@ tests/
 - **Depends on nothing outside Home Assistant.** `requirements` in the manifest stays empty.
 - Keep comments and docstrings current; the code is meant to be readable by someone new.
 
-## Running the tests
+## Checking a change
 
 ```
+pip install ruff
+ruff check && ruff format --check
+for f in custom_components/ingress_proxy/frontend/*.js; do node --check "$f"; done
 python3 tests/test_integration.py
+python3 tests/test_release.py
+python3 scripts/build_package.py
 ```
 
-Needs Python 3.13 and nothing else; CI runs it on every push. It loads the real integration against stand-ins and
+These need Python 3.13 or newer (Home Assistant 2026.9 itself runs on 3.14, which is what the workflows use), and
+Node 20 or newer to check the panel script parses. Gitea's runner runs all of these on every push
+(`.gitea/workflows/test.yml`); on GitHub the same checks run plus Home Assistant's `hassfest` and the Marketplace's
+own checks, which come from GitHub and can only run there. `test_release.py` checks the release scripts (any change
+to `scripts/` or the release workflows), and `build_package.py` builds `dist/ingress_proxy.zip` and checks it
+installs. [tests/README.md](tests/README.md) lists what each test checks.
+
+`test_integration.py` loads the real integration against stand-ins and
 checks every rewrite rule, the cookie handling, sessions, the setup form, adding and removing apps, the session
 command, and what the proxy view lets through, sends and returns.
 
@@ -62,7 +79,7 @@ pip install aiohttp
 python3 tests/test_live_proxy.py
 ```
 
-Needs aiohttp, the web library Home Assistant runs on. It starts a fake app and Home Assistant's web server with the
+Needs aiohttp, the web library Home Assistant runs on, so neither Gitea nor GitHub runs it. It starts a fake app and Home Assistant's web server with the
 real proxy view on 127.0.0.1, and acts as a browser: redirects, kept and passed-on cookies, a 1 MiB upload, gzip
 passing through, streaming, an app breaking off mid-reply, security headers, and websockets with subprotocols,
 binary messages and close codes in both directions. Run it after any change to `proxy.py` or `client.py`.
@@ -125,12 +142,41 @@ chore: update the CI actions
 
 ## Releasing
 
-1. Change `version` in `custom_components/ingress_proxy/manifest.json`.
-2. Add the release to [CHANGELOG.md](CHANGELOG.md).
-3. Run the checks above and make sure CI is green.
-4. Publish it: push the tag (`git tag vX.Y.Z && git push origin vX.Y.Z`), or open **Actions → Release → Run
-   workflow** and enter the version. The [Release workflow](.github/workflows/release.yml) checks the manifest
-   and `CHANGELOG.md` are at that version, then publishes the GitHub release the Marketplace installs from.
+Gitea is the main copy of this repository. It push-mirrors to GitHub, which is the public copy: the Marketplace
+installs from GitHub's releases, so every link in the docs and release notes points there.
+
+1. Bump `version` in `custom_components/ingress_proxy/manifest.json`. Versions go up together: there is only this
+   one (the panel script takes its version from the manifest, through the `?v=` Home Assistant loads it with).
+2. Add the release to the top of [CHANGELOG.md](CHANGELOG.md), under a heading `## X.Y.Z (date)` (move what's under
+   `## Unreleased` into it).
+3. Run the checks above, `test_live_proxy.py` included.
+4. Commit and push to Gitea, then publish with Gitea's **Release** workflow (`.gitea/workflows/release.yml`),
+   either way:
+   - **Actions → Release → Run workflow**, and enter the version without the `v` (for example `1.2.1`). It
+     creates the tag `v1.2.1` on the commit it releases.
+   - or push a version tag: `git tag v1.2.1 && git push origin v1.2.1`.
+
+   The workflow checks the version matches the manifest and `CHANGELOG.md` (`scripts/release_notes.py`), runs every
+   check, builds `ingress_proxy.zip` and checks it installs as `custom_components/ingress_proxy/`
+   (`scripts/build_package.py`), and publishes the release on Gitea with the zip and notes: install steps, then that
+   version's changelog section (`scripts/publish_gitea_release.py`). A version with a suffix (`-beta`) is published
+   as a pre-release. If any check fails, nothing is published. Running it again for the same version updates the
+   release and replaces its zip.
+
+5. Gitea's push mirror then sends the commits and the new tag to GitHub, where the tag starts GitHub's own
+   **Release** workflow (`.github/workflows/release.yml`), which runs the same checks and publishes the same
+   release there. The Marketplace picks it up from GitHub. If GitHub is down, the mirror catches up later; the Gitea
+   release is already done.
+
+The Gitea workflows use no actions (`actions/checkout` and the like download from GitHub): each job runs in a plain
+image from Docker Hub (`python:3.14-bookworm`, and `node:20-bookworm` for the panel script) and fetches the code from
+Gitea with git, so testing and releasing keep working when GitHub can't be reached. Only `ruff` comes from PyPI. When
+the runner's jobs can't reach Gitea at its public address (a runner on the same Docker network as Gitea, say), set an
+Actions variable `GITEA_INTERNAL_URL` to the address they can reach (`http://gitea-server:3000`); both workflows and
+the publish script use it.
+
+Keep every tag on Gitea: the push mirror makes GitHub's tags match Gitea's, so a tag missing from Gitea is deleted on
+GitHub, and the GitHub release on it turns into a draft.
 
 ## Known limitations / ideas
 
