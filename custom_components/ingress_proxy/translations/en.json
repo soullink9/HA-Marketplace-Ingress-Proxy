@@ -113,8 +113,7 @@
       "not_esphome": "No ESPHome Device Builder answered at that address. For the older ESPHome dashboard, choose HTTP Basic."
     },
     "abort": {
-      "already_configured": "This app is already added",
-      "reconfigure_successful": "The app's settings are saved"
+      "already_configured": "This app is already added"
     }
   },
   "selector": {

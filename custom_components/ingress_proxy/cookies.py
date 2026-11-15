@@ -9,8 +9,6 @@ address: Domain is dropped (it would name the app's internal host, and the brows
 Path is moved under the app's prefix (so the app's cookies can't collide with Home Assistant's or another app's).
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -68,7 +66,7 @@ class SetCookie:
         if expires is not None:
             try:
                 expiry = parsedate_to_datetime(expires)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 return False
             if expiry.tzinfo is None:
                 expiry = expiry.replace(tzinfo=UTC)

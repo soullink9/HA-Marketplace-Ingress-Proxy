@@ -3,8 +3,6 @@
 Kept apart from the proxy view and free of aiohttp, so every rule can be read in one place and tested on its own.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlsplit

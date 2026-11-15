@@ -2,8 +2,10 @@
 
 ## From the Marketplace
 
-In Home Assistant 2026.11 and newer, open **Settings → Marketplace**, search for **Ingress Proxy** and install it, then
-restart Home Assistant. Updates then show up under **Settings → Updates**.
+Open **Settings → Marketplace**, search for **Ingress Proxy** and install it. There's no restart: Home Assistant
+goes straight to adding your first app (step 3 below). Updates then show up under **Settings → Updates**.
+
+Ingress Proxy needs Home Assistant 2026.11 or newer, and only the latest release is supported.
 
 If it isn't listed yet, add it from its link instead: this repository's address,
 `https://github.com/soullink9/HA-Marketplace-Ingress-Proxy`. Adding from a link needs Home Assistant to be connected to GitHub.
@@ -67,9 +69,11 @@ Home Assistant was keeping for the app is deleted.
 
 ## Updating
 
-Replace the `custom_components/ingress_proxy` folder with the new one and restart Home Assistant. Browsers pick up the
-new panel by themselves.
+From the Marketplace: install the update under **Settings → Updates**, then restart when Home Assistant asks (a
+repair with a restart button appears). By hand: replace the `custom_components/ingress_proxy` folder with the new one
+and restart Home Assistant. Either way, browsers pick up the new panel by themselves.
 
 ## Uninstalling
 
-Delete every app as above, then delete `/config/custom_components/ingress_proxy` and restart.
+Delete every app as above, then remove **Ingress Proxy** in **Settings → Marketplace** (or delete
+`/config/custom_components/ingress_proxy` if you installed it by hand) and restart.

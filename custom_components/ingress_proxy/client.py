@@ -1,14 +1,13 @@
 """The HTTP client the proxy talks to the apps with."""
 
-from __future__ import annotations
-
 import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.util.hass_dict import HassKey
 
 from .const import CONNECT_TIMEOUT_SECONDS, DOMAIN
 
-_CLIENTS_KEY = f"{DOMAIN}_clients"
+_CLIENTS_KEY: HassKey[dict[bool, aiohttp.ClientSession]] = HassKey(f"{DOMAIN}_clients")
 
 
 def async_get_client(hass: HomeAssistant, verify_ssl: bool) -> aiohttp.ClientSession:
@@ -23,7 +22,7 @@ def async_get_client(hass: HomeAssistant, verify_ssl: bool) -> aiohttp.ClientSes
 
     Home Assistant closes these sessions when it stops. A closed one is replaced, so a request never fails on it.
     """
-    clients: dict[bool, aiohttp.ClientSession] = hass.data.setdefault(_CLIENTS_KEY, {})
+    clients = hass.data.setdefault(_CLIENTS_KEY, {})
     if verify_ssl not in clients or clients[verify_ssl].closed:
         clients[verify_ssl] = async_create_clientsession(
             hass,

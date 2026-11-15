@@ -3,11 +3,12 @@
 
 [tool.ruff]
 line-length = 120
-target-version = "py313"
+target-version = "py314"
 
 [tool.ruff.lint]
-# pyflakes, pycodestyle, bugbear, import order, simplifications, comprehensions, and a docstring on everything
-select = ["F", "E", "W", "B", "I", "SIM", "C4", "D1"]
+# pyflakes, pycodestyle, bugbear, import order, simplifications, comprehensions, a docstring on everything, and
+# pyupgrade: only the newest Python syntax (the Python Home Assistant 2026.11 runs on), no leftovers for older ones
+select = ["F", "E", "W", "B", "I", "SIM", "C4", "D1", "UP"]
 ignore = [
     "E501",  # the formatter sets line length; long strings, prompts and data rows are left whole
     "B905",  # zip() without strict=: the pairs in this code are always the same length

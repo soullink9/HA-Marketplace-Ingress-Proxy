@@ -4,8 +4,6 @@ Every request is checked for a valid panel session (sessions.py) before anything
 what is passed on and how it is rewritten are in rewrite.py; this module only moves the bytes.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from urllib.parse import urlsplit

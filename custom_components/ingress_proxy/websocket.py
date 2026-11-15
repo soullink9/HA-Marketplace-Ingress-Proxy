@@ -1,15 +1,13 @@
 """The one websocket command: the panel asks for a session to open its app with."""
 
-from __future__ import annotations
-
 from typing import Any
 
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
-import voluptuous as vol
+import probatio
 
 from .const import DOMAIN, SESSION_COOKIE, SESSION_TTL_SECONDS
-from .models import IngressProxyData
+from .models import DATA_KEY
 
 
 @callback
@@ -18,7 +16,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_session)
 
 
-@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/session", vol.Required("slug"): str})
+@websocket_api.websocket_command({probatio.Required("type"): f"{DOMAIN}/session", probatio.Required("slug"): str})
 @callback
 def ws_session(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     """Give the panel a session token for one app, and tell it how to store it.
@@ -26,7 +24,7 @@ def ws_session(hass: HomeAssistant, connection: websocket_api.ActiveConnection, 
     Home Assistant has already checked who is asking: this runs on their logged-in websocket. The answer also
     carries the app's browser storage entries, so the panel can write them before the app loads.
     """
-    data: IngressProxyData = hass.data[DOMAIN]
+    data = hass.data[DATA_KEY]
     app = data.apps.get(msg["slug"])
     if app is None:
         connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "There is no app with this slug")

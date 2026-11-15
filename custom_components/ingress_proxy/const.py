@@ -1,7 +1,5 @@
 """Names and settings shared across the Ingress Proxy integration."""
 
-from __future__ import annotations
-
 # Integration domain. Must match the folder name and manifest.json.
 DOMAIN = "ingress_proxy"
 

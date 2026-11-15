@@ -32,7 +32,7 @@ env:
 
 jobs:
   tests:
-    # Home Assistant 2026.9 runs on Python 3.14 and supports nothing older, so that's what the tests run on
+    # Home Assistant 2026.11 runs on Python 3.14 and supports nothing older, so that's what the tests run on
     runs-on: ubuntu-latest
     container:
       image: python:3.14-bookworm

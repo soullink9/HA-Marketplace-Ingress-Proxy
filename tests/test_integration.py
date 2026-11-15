@@ -805,6 +805,27 @@ def test_config_flow():
             "form: login section closed when adding",
             result["data_schema"].schema["login"].options == {"collapsed": True},
         )
+        login_fields = {str(key): key for key in result["data_schema"].schema["login"].schema.schema}
+        shown_with_username = {"field": "username", "operator": "exists"}
+        check(
+            "form: password and how to log in only shown once a username is typed",
+            login_fields["password"].visible == shown_with_username
+            and login_fields["login_method"].visible == shown_with_username
+            and getattr(login_fields["username"], "visible", None) is None,
+        )
+        # Home Assistant leaves hidden fields out of what the form sends: no username, so no password or method.
+        client.replies.append(FakeUpstream())
+        result = await config_flow.IngressProxyConfigFlow(hass).async_step_user(
+            {**typed, "slug": "nologin", "login": {}}
+        )
+        check(
+            "form: no username, no login (the hidden fields aren't sent)",
+            result["type"] == "create_entry"
+            and result["data"]["username"] == ""
+            and result["data"]["password"] == ""
+            and result["data"]["login_method"] == "basic",
+            result,
+        )
 
     asyncio.run(flow_checks())
 

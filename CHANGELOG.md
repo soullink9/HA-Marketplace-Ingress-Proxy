@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+**Needs Home Assistant 2026.11 or newer.** Only the latest Home Assistant release is supported from now on; the
+Marketplace keeps offering 1.3.0 to older installations.
+
+- Made for the Home Assistant 2026.11 Marketplace: it installs the release's checked `ingress_proxy.zip`, and a first
+  install needs no restart, going straight to adding your first app.
+- In an app's **Login** settings, **Password** and **How to log in** now appear only once a username is typed.
+- "Saved" after Reconfigure now uses Home Assistant's own wording.
+
+### Repository
+
+- Built for Home Assistant 2026.11 only, with nothing kept for older releases: Python 3.14 syntax throughout (no
+  `from __future__ import annotations`, enforced by ruff's pyupgrade rules), probatio instead of voluptuous, a typed
+  `HassKey` for the shared data, and the form's conditional fields.
+- Every check runs on Python 3.14, and `test_release.py` checks `hacs.json` against the README and the built zip.
+- Installation, update and removal steps describe the Marketplace.
+
 ## 1.3.0 (2026-11-15)
 
 - New: a **Login** section in the app's settings. Give an app's username and password and Home Assistant logs in to

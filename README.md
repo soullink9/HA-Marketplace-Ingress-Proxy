@@ -39,12 +39,12 @@ For every app you add:
 
 ## Requirements
 
-- Home Assistant 2026.9 or newer
+- Home Assistant 2026.11 or newer (only the latest release is supported)
 - Apps that Home Assistant can reach over HTTP or HTTPS, for example containers on the same Docker network
 
 ## Install
 
-Install **Ingress Proxy** from the Marketplace (**Settings → Marketplace**, Home Assistant 2026.11 and newer), or copy the [`custom_components/ingress_proxy`](custom_components/ingress_proxy) folder into `/config/custom_components/`, then restart Home Assistant.
+Install **Ingress Proxy** from the Marketplace (**Settings → Marketplace**): no restart is needed, it opens straight into adding your first app. Or copy the [`custom_components/ingress_proxy`](custom_components/ingress_proxy) folder into `/config/custom_components/` and restart Home Assistant.
 
 Then go to **Settings → Devices & services → Add integration → Ingress Proxy** once for each app. Full steps are in
 the [Installation](docs/Installation.md) page.

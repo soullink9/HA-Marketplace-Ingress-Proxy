@@ -17,8 +17,6 @@ Set-up overview (see docs/Development.md for the full tour):
     frontend/panel.js  the sidebar panel: a toolbar and the app's iframe
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from homeassistant.components import frontend, panel_custom
@@ -41,7 +39,7 @@ from .const import (
     STATIC_URL,
 )
 from .cookies import UpstreamCookieJar
-from .models import IngressProxyData, ProxiedApp
+from .models import DATA_KEY, IngressProxyData, ProxiedApp
 from .proxy import IngressProxyView
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -53,7 +51,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     cookie_jar = UpstreamCookieJar(Store(hass, COOKIE_STORE_VERSION, COOKIE_STORE_KEY))
     await cookie_jar.async_load()
     data = IngressProxyData(cookie_jar=cookie_jar)
-    hass.data[DOMAIN] = data
+    hass.data[DATA_KEY] = data
 
     hass.http.register_view(IngressProxyView(hass, data))
     await hass.http.async_register_static_paths(
@@ -67,7 +65,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: IngressProxyConfigEntry)
     """Add one app's sidebar panel and let the proxy serve it."""
     app = ProxiedApp.from_entry_data(entry.data)
     entry.runtime_data = app
-    data: IngressProxyData = hass.data[DOMAIN]
+    data = hass.data[DATA_KEY]
     data.apps[app.slug] = app
 
     # The version goes in the script's URL, so browsers fetch the new script after an update, and in the
@@ -89,7 +87,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: IngressProxyConfigEntry)
 async def async_unload_entry(hass: HomeAssistant, entry: IngressProxyConfigEntry) -> bool:
     """Remove the app's panel and stop serving it. Open sessions end, so a changed setting applies at once."""
     app = entry.runtime_data
-    data: IngressProxyData = hass.data[DOMAIN]
+    data = hass.data[DATA_KEY]
     frontend.async_remove_panel(hass, PANEL_URL_PREFIX + app.slug, warn_if_unknown=False)
     data.apps.pop(app.slug, None)
     data.sessions.forget_app(app.slug)
@@ -99,7 +97,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: IngressProxyConfigEntry
 
 async def async_remove_entry(hass: HomeAssistant, entry: IngressProxyConfigEntry) -> None:
     """Delete the cookies kept for an app that is removed, so its login doesn't linger in Home Assistant."""
-    data: IngressProxyData | None = hass.data.get(DOMAIN)
+    data = hass.data.get(DATA_KEY)
     if data is None:
         # Removed before the integration started (it was disabled, say): open the saved cookies directly.
         cookie_jar = UpstreamCookieJar(Store(hass, COOKIE_STORE_VERSION, COOKIE_STORE_KEY))

@@ -8,8 +8,9 @@ web server.
 
 ## Start-up
 
-`async_setup` (once, when Home Assistant starts) builds what all apps share and keeps it in `hass.data[DOMAIN]` as an
-`IngressProxyData`:
+`async_setup` (once: when Home Assistant starts, or when the first app is added straight after installing from the
+Marketplace, with no restart) builds what all apps share and keeps it in `hass.data[DATA_KEY]` (a typed `HassKey`, in
+`models.py`) as an `IngressProxyData`:
 
 - the proxy view, `IngressProxyView`, at `/api/ingress_proxy/{slug}/{path}`
 - the panel script folder, served at `/ingress_proxy_static/`
@@ -135,3 +136,17 @@ Gitea is the main copy of this repository; it push-mirrors to GitHub, the public
 | `scripts/publish_gitea_release.py` | Creates or updates the Gitea release and uploads its files, through Gitea's API (standard library only) |
 | `scripts/plan_github_releases.py` | Used by the GitHub release workflow: lists the version tags GitHub has no published release for yet, oldest first, and which one becomes "Latest" (standard library only) |
 | `tests/test_release.py` | Tests all five scripts, publishing against a fake Gitea server |
+
+## Only the latest Home Assistant
+
+Ingress Proxy supports only the latest Home Assistant release (2026.11 now), and carries no code for older ones:
+
+- **Python 3.14**, what Home Assistant runs on: annotations are evaluated lazily, so there's no
+  `from __future__ import annotations`, and ruff's pyupgrade rules (`UP`) keep the syntax current.
+- **probatio**, Home Assistant's validation library, for schemas: Home Assistant only maps `voluptuous` onto it for
+  older code.
+- **Fields shown on condition** in the setup form (`visible=` on `homeassistant.data_entry_flow` markers): the Login
+  section's password and login method only appear once a username is typed, and Home Assistant leaves them out of
+  the input while hidden.
+- **Shared abort reasons** come from Home Assistant: `reconfigure_successful` isn't in `translations/en.json`, because
+  `async_update_reload_and_abort` uses Home Assistant's own wording.

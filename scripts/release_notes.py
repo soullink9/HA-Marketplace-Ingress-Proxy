@@ -92,8 +92,8 @@ def install_steps(repo, tag):
     download = f"https://github.com/{repo}/releases/download/{tag}"
     steps = (
         "## Install\n\n"
-        f"- **From the Marketplace** (Home Assistant 2026.11 and newer): **Settings → Marketplace**, search for "
-        f"**{NAME}** and install it. If it's already installed, the Marketplace offers this release as an update.\n"
+        f"- **From the Marketplace:** **Settings → Marketplace**, search for **{NAME}** and install it; no restart is "
+        "needed. If it's already installed, the Marketplace offers this release as an update.\n"
         f"- **By hand:** download **{ZIP}** below ({download}/{ZIP}), unzip it into `/config/custom_components/` "
         f"(you get `/config/custom_components/{DOMAIN}/`), and restart Home Assistant.\n"
     )

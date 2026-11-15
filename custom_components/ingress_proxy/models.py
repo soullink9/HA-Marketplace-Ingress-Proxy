@@ -1,12 +1,11 @@
 """What the integration keeps in memory: the proxied apps, the panel sessions, the upstream cookies and logins."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME
+from homeassistant.util.hass_dict import HassKey
 
 from .const import (
     CONF_HEADERS,
@@ -20,6 +19,7 @@ from .const import (
     CONF_TITLE,
     CONF_VERIFY_SSL,
     DEFAULT_ICON,
+    DOMAIN,
     LOGIN_BASIC,
     PROXY_BASE,
 )
@@ -75,9 +75,13 @@ class ProxiedApp:
 
 @dataclass
 class IngressProxyData:
-    """Everything shared by all the apps, kept in hass.data[DOMAIN] from start-up until Home Assistant stops."""
+    """Everything shared by all the apps, kept in hass.data[DATA_KEY] from start-up until Home Assistant stops."""
 
     cookie_jar: UpstreamCookieJar
     sessions: SessionStore = field(default_factory=SessionStore)
     logins: UpstreamLogins = field(default_factory=UpstreamLogins)
     apps: dict[str, ProxiedApp] = field(default_factory=dict)  # by slug; one per loaded config entry
+
+
+# Where IngressProxyData is kept in hass.data. The key carries the type, so reading it needs no annotation.
+DATA_KEY: HassKey[IngressProxyData] = HassKey(DOMAIN)

@@ -13,8 +13,6 @@ Two ways of logging in, chosen in the app's settings:
     Device Builder then treats the page as logged in and doesn't show its login screen.
 """
 
-from __future__ import annotations
-
 import asyncio
 import base64
 import json

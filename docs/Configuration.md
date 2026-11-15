@@ -23,7 +23,8 @@ Under **Advanced**:
 | Extra request headers | none | Sent with every request to the app, one `name: value` per line. For an app that accepts an API token in a header, this logs everyone in without the app's login page. |
 | Browser storage entries | none | Written to the browser's local storage before the app loads, one `key: value` per line. For an app that keeps its login there. |
 
-Under **Login**, for an app that asks for a username and password (leave it empty otherwise):
+Under **Login**, for an app that asks for a username and password (leave it empty otherwise). **Password** and
+**How to log in** appear once a username is typed:
 
 | Setting | Default | What it does |
 | --- | --- | --- |

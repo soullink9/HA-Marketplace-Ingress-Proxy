@@ -23,7 +23,7 @@ custom_components/ingress_proxy/
 └── brand/            Icons (icon.png 256 px, icon@2x.png 512 px), drawn from docs/images/icon.svg
 tests/
 ├── README.md            What each test checks
-├── stubs.py             Stand-ins for Home Assistant (and aiohttp and voluptuous for test_integration.py)
+├── stubs.py             Stand-ins for Home Assistant (and aiohttp and probatio for test_integration.py)
 ├── test_integration.py  Everything that needs only Python: rules, cookies, sessions, form, set-up, the view's decisions
 ├── test_live_proxy.py   Real HTTP and websockets through the real view, with a fake app (needs aiohttp)
 └── test_release.py      The release scripts, publishing against a fake Gitea
@@ -65,7 +65,7 @@ python3 tests/test_release.py
 python3 scripts/build_package.py
 ```
 
-These need Python 3.13 or newer (Home Assistant 2026.9 itself runs on 3.14, which is what the workflows use), and
+These need Python 3.14, the Python Home Assistant 2026.11 runs on (the code uses syntax older Pythons don't have), and
 Node 20 or newer to check the panel script parses. Gitea's runner runs all of these on every push
 (`.gitea/workflows/test.yml`); on GitHub the same checks run plus Home Assistant's `hassfest` and the Marketplace's
 own checks, which come from GitHub and can only run there. `test_release.py` checks the release scripts (any change
@@ -126,8 +126,13 @@ exits non-zero if any check fails.
 
 ### The Marketplace
 
-`hacs.json` at the root is the Marketplace's file: the name it lists and the oldest Home Assistant version the
-integration works with. Keep that version in step with the README's requirements.
+`hacs.json` at the root is the Marketplace's file: the name it lists, the oldest Home Assistant version the
+integration works with, and the release asset it installs (`zip_release` and `filename`: the checked
+`ingress_proxy.zip` every release publishes, instead of the source at the tag). Keep that version in step with the
+README's requirements; `test_release.py` checks both.
+
+Only the latest Home Assistant release is supported. When a new one comes out, raise `homeassistant` in `hacs.json`
+and the README to it, and delete anything kept only for older releases rather than adding fallbacks.
 
 ## Commits
 

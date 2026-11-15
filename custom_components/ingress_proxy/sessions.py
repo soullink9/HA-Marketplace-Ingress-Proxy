@@ -8,8 +8,6 @@ Tokens live in memory only, so they all end when Home Assistant restarts; the pa
 websocket reconnects.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from dataclasses import dataclass
 import secrets

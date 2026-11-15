@@ -1,17 +1,17 @@
 """The setup form: add an app, and change its settings later with Reconfigure. One config entry per app."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 import re
 from typing import Any
 from urllib.parse import urlsplit
 
 import aiohttp
+from homeassistant import data_entry_flow
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.field_visibility import ConditionOperator, FieldCondition
 from homeassistant.helpers.selector import (
     IconSelector,
     ObjectSelector,
@@ -22,7 +22,7 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
     TextSelectorType,
 )
-import voluptuous as vol
+import probatio
 
 from .client import async_get_client
 from .const import (
@@ -55,42 +55,46 @@ ADVANCED_KEYS = (CONF_KEEP_PREFIX, CONF_VERIFY_SSL, CONF_HEADERS, CONF_LOCAL_STO
 LOGIN = "login"
 LOGIN_KEYS = (CONF_USERNAME, CONF_PASSWORD, CONF_LOGIN_METHOD)
 
+# The password and how to log in are only shown once a username is typed: with no username the proxy doesn't log in.
+HAS_USERNAME: FieldCondition = {"field": CONF_USERNAME, "operator": ConditionOperator.EXISTS}
+
 # A header name is a "token" (RFC 9110, section 5.6.2).
 _HEADER_NAME = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
 
-def _schema(include_slug: bool, has_login: bool = False) -> vol.Schema:
+def _schema(include_slug: bool, has_login: bool = False) -> probatio.Schema:
     """The form. The slug is only asked for when adding an app: it is part of the panel's address.
 
-    The Login section starts open when the app already has a username, so it's clear the proxy logs in.
+    The Login section starts open when the app already has a username, so it's clear the proxy logs in. Its password
+    and login method only appear once a username is typed; while hidden, Home Assistant leaves them out of the input.
     """
     fields: dict[Any, Any] = {}
     if include_slug:
-        fields[vol.Required(CONF_SLUG)] = str
-    fields[vol.Required(CONF_TITLE)] = str
-    fields[vol.Required(CONF_URL)] = TextSelector(TextSelectorConfig(type=TextSelectorType.URL))
-    fields[vol.Required(CONF_ICON, default=DEFAULT_ICON)] = IconSelector()
-    fields[vol.Required(CONF_REQUIRE_ADMIN, default=True)] = bool
-    fields[vol.Required(CONF_PERSIST_LOGIN, default=True)] = bool
-    fields[vol.Required(ADVANCED)] = section(
-        vol.Schema(
+        fields[probatio.Required(CONF_SLUG)] = str
+    fields[probatio.Required(CONF_TITLE)] = str
+    fields[probatio.Required(CONF_URL)] = TextSelector(TextSelectorConfig(type=TextSelectorType.URL))
+    fields[probatio.Required(CONF_ICON, default=DEFAULT_ICON)] = IconSelector()
+    fields[probatio.Required(CONF_REQUIRE_ADMIN, default=True)] = bool
+    fields[probatio.Required(CONF_PERSIST_LOGIN, default=True)] = bool
+    fields[probatio.Required(ADVANCED)] = section(
+        probatio.Schema(
             {
-                vol.Required(CONF_KEEP_PREFIX, default=False): bool,
-                vol.Required(CONF_VERIFY_SSL, default=True): bool,
-                vol.Optional(CONF_HEADERS): ObjectSelector(),
-                vol.Optional(CONF_LOCAL_STORAGE): ObjectSelector(),
+                probatio.Required(CONF_KEEP_PREFIX, default=False): bool,
+                probatio.Required(CONF_VERIFY_SSL, default=True): bool,
+                probatio.Optional(CONF_HEADERS): ObjectSelector(),
+                probatio.Optional(CONF_LOCAL_STORAGE): ObjectSelector(),
             }
         ),
         {"collapsed": True},
     )
-    fields[vol.Required(LOGIN)] = section(
-        vol.Schema(
+    fields[probatio.Required(LOGIN)] = section(
+        probatio.Schema(
             {
-                vol.Optional(CONF_USERNAME): TextSelector(TextSelectorConfig(autocomplete="username")),
-                vol.Optional(CONF_PASSWORD): TextSelector(
+                probatio.Optional(CONF_USERNAME): TextSelector(TextSelectorConfig(autocomplete="username")),
+                data_entry_flow.Optional(CONF_PASSWORD, visible=HAS_USERNAME): TextSelector(
                     TextSelectorConfig(type=TextSelectorType.PASSWORD, autocomplete="new-password")
                 ),
-                vol.Required(CONF_LOGIN_METHOD, default=LOGIN_BASIC): SelectSelector(
+                data_entry_flow.Required(CONF_LOGIN_METHOD, default=LOGIN_BASIC, visible=HAS_USERNAME): SelectSelector(
                     SelectSelectorConfig(
                         options=list(LOGIN_METHODS),
                         translation_key=CONF_LOGIN_METHOD,
@@ -101,7 +105,7 @@ def _schema(include_slug: bool, has_login: bool = False) -> vol.Schema:
         ),
         {"collapsed": not has_login},
     )
-    return vol.Schema(fields)
+    return probatio.Schema(fields)
 
 
 def _form_values(data: Mapping[str, Any]) -> dict[str, Any]:
@@ -131,7 +135,7 @@ def clean_slug(raw: str) -> str | None:
     slug = raw.strip()
     try:
         return cv.slug(slug)
-    except vol.Invalid:
+    except probatio.Invalid:
         return None
 
 
@@ -309,7 +313,7 @@ class IngressProxyConfigFlow(ConfigFlow, domain=DOMAIN):
                 status = response.status
         except aiohttp.ClientConnectorCertificateError:
             return {"base": "certificate"}
-        except (aiohttp.ClientError, TimeoutError):
+        except aiohttp.ClientError, TimeoutError:
             return {"base": "cannot_connect"}
         if uses_basic and status == 401:
             return {"base": "invalid_auth"}
@@ -321,6 +325,6 @@ class IngressProxyConfigFlow(ConfigFlow, domain=DOMAIN):
                 return {"base": "invalid_auth"}
             except NotEsphome:
                 return {"base": "not_esphome"}
-            except (aiohttp.ClientError, TimeoutError):
+            except aiohttp.ClientError, TimeoutError:
                 return {"base": "cannot_connect"}
         return {}

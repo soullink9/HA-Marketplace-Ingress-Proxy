@@ -361,12 +361,34 @@ def test_plan():
     check("::warning::v0.9.0" in result.stdout, "…and warns, in the run's log, about the tag it can't build")
 
 
+# --- hacs.json: what the Marketplace reads ---------------------------------------------------------------------------
+def test_marketplace():
+    """The Marketplace installs the checked zip, on the Home Assistant release the README asks for."""
+    hacs = json.loads((ROOT / "hacs.json").read_text())
+    check(hacs.get("name") == release_notes.NAME, "hacs.json: listed under the integration's name")
+    check(
+        hacs.get("zip_release") is True and hacs.get("filename") == ZIP,
+        f"hacs.json: installs the release's {ZIP}, the zip build_package.py checks",
+    )
+    minimum = hacs.get("homeassistant", "")
+    check(
+        re.fullmatch(r"\d{4}\.\d{1,2}\.\d+", minimum or "") is not None,
+        f"hacs.json: a minimum Home Assistant ({minimum})",
+    )
+    release = minimum.rsplit(".", 1)[0]
+    check(
+        f"Home Assistant {release} or newer" in (ROOT / "README.md").read_text(),
+        f"README asks for the same Home Assistant as hacs.json ({release})",
+    )
+
+
 if __name__ == "__main__":
     try:
         test_notes()
         test_package()
         test_publish()
         test_plan()
+        test_marketplace()
     finally:
         shutil.rmtree(TMP, ignore_errors=True)
     print()

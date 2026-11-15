@@ -1,27 +1,25 @@
-"""Stand-ins for Home Assistant (and, when they aren't installed, aiohttp and voluptuous), so the integration runs
+"""Stand-ins for Home Assistant (and, when they aren't installed, aiohttp and probatio), so the integration runs
 with plain Python.
 
 Importing this module registers fake modules under the real names, then puts custom_components/ on the path so
 `import ingress_proxy` loads the real integration. The stand-ins record what the integration asks Home Assistant
 to do in RECORDED: panels registered and removed, views, static paths, websocket commands and stored data.
 
-aiohttp and voluptuous are replaced too, unless the test imported the real ones before this module (test_live_proxy.py
+aiohttp and probatio are replaced too, unless the test imported the real ones before this module (test_live_proxy.py
 does, for aiohttp): test_integration.py always runs against the stand-ins, so it gives the same result everywhere.
 """
 
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 import re
 import sys
 import types
-from typing import Generic, TypeVar
 
 sys.dont_write_bytecode = True  # keep __pycache__ out of the repository
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "custom_components"))
 
-T = TypeVar("T")
 RECORDED = {
     "panels": {},  # frontend_url_path -> the keyword arguments it was registered with
     "removed_panels": [],
@@ -41,8 +39,8 @@ def _module(name, **attributes):
     return module
 
 
-# ---------- voluptuous (only the parts the integration builds its forms and commands with) ----------
-if "voluptuous" not in sys.modules:
+# ---------- probatio, Home Assistant's validation library (only the parts the integration builds its forms and commands with) ----------
+if "probatio" not in sys.modules:
 
     class Invalid(Exception):
         pass
@@ -64,9 +62,9 @@ if "voluptuous" not in sys.modules:
         def __init__(self, schema, extra=None):
             self.schema = schema
 
-    _module("voluptuous", Invalid=Invalid, Required=Required, Optional=Optional, Schema=Schema)
+    _module("probatio", Invalid=Invalid, Required=Required, Optional=Optional, Schema=Schema)
 
-import voluptuous as vol  # noqa: E402  (the real one, or the stand-in above)
+import probatio  # noqa: E402  (the real one, or the stand-in above)
 
 # ---------- aiohttp (when it isn't installed) ----------
 if not REAL_AIOHTTP:
@@ -251,7 +249,7 @@ sys.modules["homeassistant.components"].panel_custom = panel_custom
 sys.modules["homeassistant.components"].websocket_api = websocket_api
 
 
-class ConfigEntry(Generic[T]):
+class ConfigEntry[T]:
     def __init__(self, data, entry_id="entry1", unique_id=None, title=""):
         self.data = data
         self.entry_id = entry_id
@@ -306,13 +304,38 @@ class section:  # noqa: N801  (Home Assistant's name)
         self.options = options
 
 
-_module("homeassistant.data_entry_flow", section=section)
+class FlowRequired(probatio.Required):
+    """Home Assistant's own marker: a probatio one that can be shown only while other fields match `visible`."""
+
+    def __new__(cls, schema, default=None, visible=None):
+        marker = super().__new__(cls, schema, default)
+        marker.visible = visible
+        return marker
+
+
+class FlowOptional(probatio.Optional):
+    def __new__(cls, schema, default=None, visible=None):
+        marker = super().__new__(cls, schema, default)
+        marker.visible = visible
+        return marker
+
+
+_module("homeassistant.data_entry_flow", section=section, Required=FlowRequired, Optional=FlowOptional)
+sys.modules["homeassistant"].data_entry_flow = sys.modules["homeassistant.data_entry_flow"]
+
+
+class ConditionOperator(StrEnum):
+    EQ = "eq"
+    EXISTS = "exists"
+
+
+_module("homeassistant.helpers.field_visibility", ConditionOperator=ConditionOperator, FieldCondition=dict)
 
 
 def slug(value):
     """Home Assistant's rule: the value must already be what slugify would make of it."""
     if not isinstance(value, str) or not re.fullmatch(r"[a-z0-9]+(_[a-z0-9]+)*", value):
-        raise vol.Invalid(f"invalid slug {value}")
+        raise probatio.Invalid(f"invalid slug {value}")
     return value
 
 
@@ -330,12 +353,12 @@ class _Selector:
         self.config = config
 
 
-class TextSelectorType(str, Enum):
+class TextSelectorType(StrEnum):
     URL = "url"
     PASSWORD = "password"
 
 
-class SelectSelectorMode(str, Enum):
+class SelectSelectorMode(StrEnum):
     DROPDOWN = "dropdown"
 
 
@@ -377,6 +400,14 @@ def _deep_copy(value):
 
 _module("homeassistant.helpers.storage", Store=Store)
 _module("homeassistant.helpers.typing", ConfigType=dict)
+_module("homeassistant.util")
+
+
+class HassKey[T](str):
+    pass
+
+
+_module("homeassistant.util.hass_dict", HassKey=HassKey)
 
 
 def async_create_clientsession(hass, verify_ssl=True, **kwargs):
