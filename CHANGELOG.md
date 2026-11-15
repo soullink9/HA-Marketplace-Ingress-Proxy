@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 (2026-11-15)
 
 - New: a **Login** section in the app's settings. Give an app's username and password and Home Assistant logs in to
   it itself, so the app never asks for them in the browser, and the password never reaches the browser. **HTTP
