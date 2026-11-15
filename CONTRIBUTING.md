@@ -126,10 +126,13 @@ exits non-zero if any check fails.
 
 ### The Marketplace
 
-`hacs.json` at the root is the Marketplace's file: the name it lists, the oldest Home Assistant version the
-integration works with, and the release asset it installs (`zip_release` and `filename`: the checked
-`ingress_proxy.zip` every release publishes, instead of the source at the tag). Keep that version in step with the
-README's requirements; `test_release.py` checks both.
+`hacs.json` at the root is the Marketplace's file: the name it lists and the oldest Home Assistant version the
+integration works with. Keep that version in step with the README's requirements; `test_release.py` checks it.
+
+The Marketplace installs `custom_components/ingress_proxy/` from the release's tag, not the release's zip. Don't set
+`zip_release`: the Marketplace unzips a release asset straight into `custom_components/ingress_proxy/`, so the zip
+(which holds an `ingress_proxy/` folder, for installing by hand) would end up one folder too deep and fail with "no
+usable manifest.json" (1.4.0 did), and the catalog refuses `zip_release` repositories altogether.
 
 Only the latest Home Assistant release is supported. When a new one comes out, raise `homeassistant` in `hacs.json`
 and the README to it, and delete anything kept only for older releases rather than adding fallbacks.

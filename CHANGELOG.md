@@ -1,12 +1,20 @@
 # Changelog
 
+## 1.4.1 (2026-11-15)
+
+- Fixed: updating to 1.4.0 from the Marketplace failed with "The installed content has no usable manifest.json where
+  Home Assistant looks for it". 1.4.0 told the Marketplace to install the release's zip, which it unpacks one folder
+  too deep. The Marketplace now installs the integration from the release's tag again, as 1.3.0 did. Skip 1.4.0 and
+  update straight to 1.4.1.
+
 ## 1.4.0 (2026-11-15)
 
 **Needs Home Assistant 2026.11 or newer.** Only the latest Home Assistant release is supported from now on; the
 Marketplace keeps offering 1.3.0 to older installations.
 
-- Made for the Home Assistant 2026.11 Marketplace: it installs the release's checked `ingress_proxy.zip`, and a first
-  install needs no restart, going straight to adding your first app.
+- Made for the Home Assistant 2026.11 Marketplace: it installs the release's checked `ingress_proxy.zip` (this broke
+  installing from the Marketplace; fixed in 1.4.1), and a first install needs no restart, going straight to adding
+  your first app.
 - In an app's **Login** settings, **Password** and **How to log in** now appear only once a username is typed.
 - "Saved" after Reconfigure now uses Home Assistant's own wording.
 

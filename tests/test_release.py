@@ -363,12 +363,19 @@ def test_plan():
 
 # --- hacs.json: what the Marketplace reads ---------------------------------------------------------------------------
 def test_marketplace():
-    """The Marketplace installs the checked zip, on the Home Assistant release the README asks for."""
+    """The Marketplace installs custom_components/<domain>/ from the tag, on the Home Assistant the README asks for."""
     hacs = json.loads((ROOT / "hacs.json").read_text())
     check(hacs.get("name") == release_notes.NAME, "hacs.json: listed under the integration's name")
+    # The Marketplace unzips a zip_release asset straight into custom_components/<domain>/; our zip holds a <domain>/
+    # folder (for installing by hand), so the manifest would land a folder too deep (what broke 1.4.0).
     check(
-        hacs.get("zip_release") is True and hacs.get("filename") == ZIP,
-        f"hacs.json: installs the release's {ZIP}, the zip build_package.py checks",
+        "zip_release" not in hacs and "filename" not in hacs,
+        f"hacs.json: no zip_release, the Marketplace takes custom_components/{DOMAIN}/ from the tag",
+    )
+    folders = [path.name for path in (ROOT / "custom_components").iterdir() if path.is_dir()]
+    check(
+        folders == [DOMAIN] and (ROOT / "custom_components" / DOMAIN / "manifest.json").is_file(),
+        f"custom_components/ holds only {DOMAIN}/, with its manifest.json at the top (where the Marketplace looks)",
     )
     minimum = hacs.get("homeassistant", "")
     check(
