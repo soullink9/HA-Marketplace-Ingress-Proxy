@@ -9,7 +9,9 @@ Prints PASS/FAIL per check and exits non-zero if any check fails.
 """
 
 import asyncio
+import base64
 import gzip
+import json
 from pathlib import Path
 import sys
 
@@ -144,7 +146,63 @@ def make_app(seen):
         await ws.close()
         return ws
 
+    @routes.get("/basic")
+    async def basic(request):
+        # An app behind HTTP Basic, like the older ESPHome dashboard with a password.
+        expected = "Basic " + base64.b64encode(b"admin:hunter2").decode()
+        if request.headers.get("Authorization") != expected:
+            return web.Response(status=401, headers={"WWW-Authenticate": 'Basic realm="app"'})
+        return web.Response(text="logged in")
+
     app = web.Application(client_max_size=8 * 1024 * 1024)  # aiohttp's default (1 MiB) would refuse BIG_BODY
+    app.add_routes(routes)
+    return app
+
+
+def make_esphome(state):
+    """Enough of an ESPHome Device Builder with a password: REST takes a Bearer token, /ws logs in in-band.
+
+    `state["tokens"]` holds the tokens handed out; removing one is what pressing Log out does.
+    """
+    routes = web.RouteTableDef()
+
+    def bearer(request):
+        header = request.headers.get("Authorization", "")
+        return header.removeprefix("Bearer ") if header.startswith("Bearer ") else None
+
+    @routes.get("/devices")
+    async def devices(request):
+        if bearer(request) not in state["tokens"]:
+            return web.Response(
+                status=401, headers={"WWW-Authenticate": 'Basic realm="ESPHome Device Builder", Bearer'}
+            )
+        return web.json_response(["kitchen"])
+
+    @routes.get("/ws")
+    async def websocket(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        logged_in = bearer(request) in state["tokens"]
+        await ws.send_str(json.dumps({"server_version": "1.28.1", "requires_auth": not logged_in}))
+        async for message in ws:
+            command = json.loads(message.data)
+            if command["command"] == "auth/login":
+                args = command["args"]
+                if (args["username"], args["password"]) == ("admin", "hunter2"):
+                    token = f"token{len(state['issued']) + 1}"
+                    state["issued"].append(token)
+                    state["tokens"].add(token)
+                    reply = {"message_id": command["message_id"], "result": {"token": token, "expires_at": 0}}
+                else:
+                    reply = {"message_id": command["message_id"], "error_code": "not_authenticated"}
+            elif logged_in:
+                reply = {"message_id": command["message_id"], "result": "ok"}
+            else:
+                reply = {"message_id": command["message_id"], "error_code": "not_authenticated"}
+            await ws.send_str(json.dumps(reply))
+        return ws
+
+    app = web.Application()
     app.add_routes(routes)
     return app
 
@@ -196,6 +254,8 @@ async def main():
     """Start everything, then act as the browser."""
     seen = {}
     app_runner, app_url = await start(make_app(seen))
+    esphome_state = {"tokens": set(), "issued": []}
+    esphome_runner, esphome_url = await start(make_esphome(esphome_state))
     clients = []
 
     def client_factory(verify_ssl, **kwargs):
@@ -209,6 +269,10 @@ async def main():
     await ingress_proxy.async_setup_entry(hass, entry("app", app_url))
     await ingress_proxy.async_setup_entry(hass, entry("open", app_url, persist_login=False, require_admin=False))
     await ingress_proxy.async_setup_entry(hass, entry("down", "http://127.0.0.1:9"))
+    await ingress_proxy.async_setup_entry(hass, entry("basic", app_url, username="admin", password="hunter2"))
+    await ingress_proxy.async_setup_entry(
+        hass, entry("esp", esphome_url, username="admin", password="hunter2", login_method="esphome")
+    )
     data = hass.data["ingress_proxy"]
     ha_runner, ha_url = await start(make_home_assistant_server(stubs.RECORDED["views"][0]))
 
@@ -410,12 +474,49 @@ async def main():
                 check("app down: websocket 502", False)
         except aiohttp.WSServerHandshakeError as err:
             check("app down: websocket 502", err.status == 502)
+
+        # Apps Home Assistant logs in to itself.
+        for slug in ("basic", "esp"):
+            browser.cookie_jar.update_cookies(
+                {SESSION_COOKIE: data.sessions.create(slug, is_admin=True)},
+                response_url=aiohttp.client.URL(f"{base}/{slug}/"),
+            )
+        async with browser.get(f"{base}/basic/basic", headers={"Authorization": "Basic d3Jvbmc6d3Jvbmc="}) as response:
+            check(
+                "basic login: the app lets the browser in on Home Assistant's login",
+                response.status == 200 and await response.text() == "logged in",
+                response.status,
+            )
+        async with browser.get(f"{base}/app/basic") as response:
+            check(
+                "basic login: an app without a login still gets its challenge to the browser",
+                response.status == 401 and "WWW-Authenticate" in response.headers,
+            )
+
+        async with browser.get(f"{base}/esp/devices") as response:
+            check("esphome: logged in, REST works", response.status == 200 and await response.json() == ["kitchen"])
+        async with browser.ws_connect(f"{base}/esp/ws") as ws:
+            info = json.loads((await ws.receive(timeout=2)).data)
+            check("esphome: websocket logged in, so no login screen", info.get("requires_auth") is False, info)
+            await ws.send_str(json.dumps({"command": "devices/list", "message_id": "1"}))
+            reply = json.loads((await ws.receive(timeout=2)).data)
+            check("esphome: commands work over it", reply.get("result") == "ok", reply)
+        check("esphome: one login for all of that", esphome_state["issued"] == ["token1"], esphome_state)
+
+        esphome_state["tokens"].clear()  # someone pressed Log out in the Device Builder
+        async with browser.ws_connect(f"{base}/esp/ws") as ws:
+            info = json.loads((await ws.receive(timeout=2)).data)
+            check("esphome: after Log out the websocket logs in again", info.get("requires_auth") is False, info)
+        async with browser.get(f"{base}/esp/devices") as response:
+            check("esphome: and REST uses the new token", response.status == 200)
+        check("esphome: logged in twice in all", esphome_state["issued"] == ["token1", "token2"], esphome_state)
     finally:
         await browser.close()
         for client in clients:
             await client.close()
         await ha_runner.cleanup()
         await app_runner.cleanup()
+        await esphome_runner.cleanup()
 
 
 if __name__ == "__main__":

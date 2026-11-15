@@ -33,6 +33,20 @@
               "headers": "Sent with every request to the app, one per line, such as Authorization: Bearer YOUR_TOKEN.",
               "local_storage": "Written to the browser before the app loads, one per line, such as ma_access_token: YOUR_TOKEN. Anyone who can open the panel can read them."
             }
+          },
+          "login": {
+            "name": "Login",
+            "description": "Leave empty unless the app asks for a username and password. Home Assistant then logs in to the app itself, so nobody is asked for the app's password in the browser, and the password never reaches the browser.",
+            "data": {
+              "username": "Username",
+              "password": "Password",
+              "login_method": "How to log in"
+            },
+            "data_description": {
+              "username": "The app's username. Clear it to stop logging in.",
+              "password": "The app's password. When changing an app, leave it empty to keep the saved password.",
+              "login_method": "HTTP Basic suits most apps and the older ESPHome dashboard. Choose ESPHome Device Builder for the dashboard of newer ESPHome releases."
+            }
           }
         }
       },
@@ -66,6 +80,20 @@
               "headers": "Sent with every request to the app, one per line, such as Authorization: Bearer YOUR_TOKEN.",
               "local_storage": "Written to the browser before the app loads, one per line, such as ma_access_token: YOUR_TOKEN. Anyone who can open the panel can read them."
             }
+          },
+          "login": {
+            "name": "Login",
+            "description": "Leave empty unless the app asks for a username and password. Home Assistant then logs in to the app itself, so nobody is asked for the app's password in the browser, and the password never reaches the browser.",
+            "data": {
+              "username": "Username",
+              "password": "Password",
+              "login_method": "How to log in"
+            },
+            "data_description": {
+              "username": "The app's username. Clear it to stop logging in.",
+              "password": "The app's password. When changing an app, leave it empty to keep the saved password.",
+              "login_method": "HTTP Basic suits most apps and the older ESPHome dashboard. Choose ESPHome Device Builder for the dashboard of newer ESPHome releases."
+            }
           }
         }
       }
@@ -78,11 +106,23 @@
       "invalid_headers": "Extra request headers must be lines of name: value, with plain header names and no line breaks in the values",
       "invalid_local_storage": "Browser storage entries must be lines of key: value",
       "cannot_connect": "Home Assistant can't reach the app at that address",
-      "certificate": "The app's SSL certificate can't be verified. Turn off certificate verification under Advanced if it is self-signed."
+      "certificate": "The app's SSL certificate can't be verified. Turn off certificate verification under Advanced if it is self-signed.",
+      "invalid_auth": "The app refused the username or password",
+      "invalid_username": "The username can't contain a colon (:)",
+      "missing_password": "Enter the app's password",
+      "not_esphome": "No ESPHome Device Builder answered at that address. For the older ESPHome dashboard, choose HTTP Basic."
     },
     "abort": {
       "already_configured": "This app is already added",
       "reconfigure_successful": "The app's settings are saved"
+    }
+  },
+  "selector": {
+    "login_method": {
+      "options": {
+        "basic": "HTTP Basic",
+        "esphome": "ESPHome Device Builder"
+      }
     }
   }
 }

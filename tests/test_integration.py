@@ -21,7 +21,7 @@ import stubs  # noqa: E402,I001  (registers the stand-ins before the integration
 import aiohttp  # noqa: E402  (the stand-in)
 
 import ingress_proxy  # noqa: E402
-from ingress_proxy import config_flow, cookies, proxy, rewrite, sessions, websocket  # noqa: E402
+from ingress_proxy import config_flow, cookies, logins, proxy, rewrite, sessions, websocket  # noqa: E402
 from ingress_proxy.client import async_get_client  # noqa: E402
 from ingress_proxy.const import SESSION_COOKIE, SESSION_TTL_SECONDS  # noqa: E402
 from ingress_proxy.models import ProxiedApp  # noqa: E402
@@ -40,6 +40,10 @@ MUSIC = ProxiedApp(slug="music", title="Music", url="http://music:8095")
 MUSIC_PREFIXED = ProxiedApp(slug="music", title="Music", url="http://music:8095", keep_prefix=True)
 WITH_PATH = ProxiedApp(slug="z2m", title="Zigbee", url="http://z2m:8080/ui")
 WITH_TOKEN = ProxiedApp(slug="api", title="API", url="http://api:80", headers={"Authorization": "Bearer abc"})
+WITH_LOGIN = ProxiedApp(slug="esp", title="ESPHome", url="http://esphome:6052", username="admin", password="pa:ss é")
+ESPHOME = ProxiedApp(
+    slug="esp", title="ESPHome", url="http://esphome:6052", username="admin", password="hunter2", login_method="esphome"
+)
 
 
 # ---------------------------------------------------------------- rewrite.py
@@ -168,6 +172,25 @@ def test_rewrite():
 
     check("ws url: http", rewrite.websocket_url("http://a:1/ws?x") == "ws://a:1/ws?x")
     check("ws url: https", rewrite.websocket_url("https://a/ws") == "wss://a/ws")
+
+    browser_auth = [("Accept", "*/*"), ("authorization", "Basic from-the-browser")]
+    check(
+        "authorization: no login leaves headers alone", rewrite.with_authorization(browser_auth, None) is browser_auth
+    )
+    check(
+        "authorization: the login replaces the browser's",
+        rewrite.with_authorization(browser_auth, "Basic login")
+        == [("Accept", "*/*"), ("Authorization", "Basic login")],
+    )
+    challenge = [("WWW-Authenticate", 'Basic realm="app"'), ("Content-Type", "text/plain")]
+    check(
+        "www-authenticate: passed on when Home Assistant doesn't log in",
+        ("WWW-Authenticate", 'Basic realm="app"') in rewrite.response_headers(challenge, MUSIC),
+    )
+    check(
+        "www-authenticate: dropped when Home Assistant logs in, so the browser shows no login box",
+        rewrite.response_headers(challenge, WITH_LOGIN) == [("Content-Type", "text/plain")],
+    )
     for code, expected in (
         (1000, 1000),
         (1001, 1001),
@@ -284,6 +307,71 @@ def test_sessions():
     check("session: forget one app", len(store) == 1 and store.find(second, "music") is not None)
 
 
+# ---------------------------------------------------------------- logins.py
+def test_logins():
+    """HTTP Basic, and logging in to an ESPHome Device Builder for its token."""
+    check(
+        "basic: username:password in UTF-8, base64",
+        logins.basic_authorization("admin", "pa:ss é") == "Basic YWRtaW46cGE6c3Mgw6k=",
+    )
+    check("password left out of the app's repr", "pa:ss" not in repr(WITH_LOGIN))
+    check("esphome: server info asking for a login", logins.esphome_wants_login('{"requires_auth": true}'))
+    for message in ('{"requires_auth": false}', "{}", "[]", "not json", '{"requires_auth": "yes"}'):
+        check(f"esphome: no login asked by {message!r}", not logins.esphome_wants_login(message))
+
+    async def checks():
+        store = logins.UpstreamLogins()
+        client = FakeClient()
+        check("no username: no login", await store.async_authorization(client, MUSIC) is None)
+        check(
+            "basic: sent as is",
+            await store.async_authorization(client, WITH_LOGIN) == "Basic YWRtaW46cGE6c3Mgw6k=",
+        )
+        check("basic: no websocket needed", client.websockets == [])
+
+        client.esphome = FakeEsphome()
+        results = await asyncio.gather(*(store.async_authorization(client, ESPHOME) for _ in range(5)))
+        check("esphome: bearer token", results == ["Bearer token1"] * 5, results)
+        check("esphome: one login for many requests at once", client.esphome.logins == [("admin", "hunter2")])
+        check("esphome: logged in on its /ws", client.websockets == ["ws://esphome:6052/ws"], client.websockets)
+        store.forget("esp")
+        check("esphome: forget logs in again", await store.async_authorization(client, ESPHOME) == "Bearer token2")
+
+        client.esphome = FakeEsphome(password="other")
+        store.forget("esp")
+        try:
+            await store.async_authorization(client, ESPHOME)
+            check("esphome: wrong password refused", False)
+        except logins.LoginRefused as err:
+            check("esphome: wrong password refused, without saying it", "hunter2" not in str(err), str(err))
+
+        client.esphome = FakeEsphome()
+        try:
+            await store.async_authorization(client, ESPHOME)
+            check("esphome: a refusal isn't retried straight away", False)
+        except logins.LoginRefused:
+            check("esphome: a refusal isn't retried straight away", client.esphome.logins == [])
+        store.forget("esp")
+        check(
+            "esphome: forget tries again at once", await store.async_authorization(client, ESPHOME) == "Bearer token1"
+        )
+
+        store.forget("esp")
+        client.esphome = FakeEsphome(password=None)
+        check("esphome: no password set, nothing to send", await store.async_authorization(client, ESPHOME) is None)
+
+        for esphome, name in ((FakeEsphome(speaks=False), "speaks something else"), (None, "no websocket")):
+            client.esphome = esphome
+            store.forget("esp")
+            try:
+                await store.async_authorization(client, ESPHOME)
+                check(f"esphome: not a Device Builder ({name})", False)
+            except logins.NotEsphome:
+                check(f"esphome: not a Device Builder ({name})", True)
+
+    asyncio.run(checks())
+
+
 # ---------------------------------------------------------------- a fake app, as the proxy's client sees it
 class FakeHeaders:
     """Headers as a list of pairs, with aiohttp's getall."""
@@ -337,6 +425,22 @@ class FakeClient:
         self.closed = False
         self.requests = []
         self.replies = []
+        self.esphome = None  # a FakeEsphome answers websockets; None: no websocket at all (a 404 to the upgrade)
+        self.websockets = []
+
+    def ws_connect(self, url, **kwargs):
+        self.websockets.append(url)
+        if self.esphome is None:
+
+            class Refused:
+                async def __aenter__(self):
+                    raise aiohttp.WSServerHandshakeError(status=404)
+
+                async def __aexit__(self, *exc):
+                    return False
+
+            return Refused()
+        return self.esphome.connect()
 
     async def request(self, method, url, headers, data, allow_redirects):
         self.requests.append({"method": method, "url": url, "headers": headers, "data": data})
@@ -359,6 +463,63 @@ class FakeClient:
 
             return Failing()
         return reply
+
+
+class FakeEsphome:
+    """An ESPHome Device Builder's websocket login, as its /ws answers it.
+
+    `password` None: no password set, so every connection is logged in from the start. `speaks` False: something
+    that isn't a Device Builder accepts the websocket and says something else.
+    """
+
+    def __init__(self, password="hunter2", speaks=True):
+        self.password = password
+        self.speaks = speaks
+        self.logins = []  # the (username, password) of each login command
+        self.tokens = []  # the tokens handed out
+
+    def connect(self):
+        """A new websocket: the server info comes first, as the Device Builder sends it."""
+        socket = FakeEsphomeSocket(self)
+        if self.speaks:
+            socket.inbox.append(json.dumps({"server_version": "1.28.1", "requires_auth": self.password is not None}))
+        else:
+            socket.inbox.append("hello")
+        return socket
+
+
+class FakeEsphomeSocket:
+    """One websocket to the FakeEsphome."""
+
+    def __init__(self, esphome):
+        self.esphome = esphome
+        self.inbox = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def receive(self):
+        return types.SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=self.inbox.pop(0))
+
+    async def send_str(self, text):
+        command = json.loads(text)
+        args = command["args"]
+        self.esphome.logins.append((args["username"], args["password"]))
+        # Something else first, to show the proxy waits for the reply to its own command.
+        self.inbox.append(json.dumps({"message_id": "other", "event": "noise"}))
+        if args["username"] == "admin" and args["password"] == self.esphome.password:
+            token = f"token{len(self.esphome.tokens) + 1}"
+            self.esphome.tokens.append(token)
+            self.inbox.append(json.dumps({"message_id": command["message_id"], "result": {"token": token}}))
+        else:
+            self.inbox.append(
+                json.dumps(
+                    {"message_id": command["message_id"], "error_code": "not_authenticated", "details": "Invalid"}
+                )
+            )
 
 
 class FakeRequest:
@@ -481,6 +642,9 @@ def test_config_flow():
                 "url": "http://music:8095",
                 "headers": {},
                 "local_storage": {"ma_access_token": "t"},
+                "username": "",
+                "password": "",
+                "login_method": "basic",
             },
             result["data"],
         )
@@ -553,6 +717,93 @@ def test_config_flow():
             "reconfigure: slug kept, title changed, headers cleared",
             entry.data["slug"] == "music" and entry.title == "Music Assistant" and entry.data["headers"] == {},
             entry.data,
+        )
+
+        # ---- the Login section
+        with_login = {**typed, "login": {"username": " admin ", "password": "pa:ss é", "login_method": "basic"}}
+        client.replies.append(FakeUpstream())
+        result = await config_flow.IngressProxyConfigFlow(hass).async_step_user(with_login)
+        sent = dict(client.requests[-1]["headers"])
+        check("login: basic checked with the login", sent.get("Authorization") == "Basic YWRtaW46cGE6c3Mgw6k=", sent)
+        check(
+            "login: saved flat, username tidied",
+            result["type"] == "create_entry"
+            and (result["data"]["username"], result["data"]["password"], result["data"]["login_method"])
+            == ("admin", "pa:ss é", "basic"),
+            result,
+        )
+        client.replies.append(FakeUpstream(status=401))
+        result = await config_flow.IngressProxyConfigFlow(hass).async_step_user(with_login)
+        check("login: basic refused with 401", result["errors"] == {"base": "invalid_auth"}, result["errors"])
+
+        for login, error in (
+            ({"username": "admin"}, "missing_password"),
+            ({"username": "ad:min", "password": "x"}, "invalid_username"),
+        ):
+            requests_before = len(client.requests)
+            result = await config_flow.IngressProxyConfigFlow(hass).async_step_user({**typed, "login": login})
+            check(f"login: {error}", result["errors"] == {"base": error}, result["errors"])
+            check(f"login: {error} sends nothing", len(client.requests) == requests_before)
+        client.replies.append(FakeUpstream())
+        result = await config_flow.IngressProxyConfigFlow(hass).async_step_user(
+            {**typed, "login": {"username": " ", "password": "stray", "login_method": "basic"}}
+        )
+        check(
+            "login: no username, no password kept",
+            result["data"]["username"] == "" and result["data"]["password"] == "",
+            result["data"],
+        )
+        check("login: no username, no Authorization", "Authorization" not in dict(client.requests[-1]["headers"]))
+
+        esphome_login = {**typed, "login": {"username": "admin", "password": "hunter2", "login_method": "esphome"}}
+        client.esphome = FakeEsphome()
+        client.replies.append(FakeUpstream())
+        result = await config_flow.IngressProxyConfigFlow(hass).async_step_user(esphome_login)
+        check("login: esphome logged in to check", result["type"] == "create_entry" and client.esphome.tokens)
+        check(
+            "login: esphome front page checked without Basic",
+            "Authorization" not in dict(client.requests[-1]["headers"]),
+        )
+        client.esphome = FakeEsphome(password="other")
+        client.replies.append(FakeUpstream())
+        result = await config_flow.IngressProxyConfigFlow(hass).async_step_user(esphome_login)
+        check("login: esphome refused", result["errors"] == {"base": "invalid_auth"}, result["errors"])
+        client.esphome = None
+        client.replies.append(FakeUpstream())
+        result = await config_flow.IngressProxyConfigFlow(hass).async_step_user(esphome_login)
+        check("login: not a Device Builder", result["errors"] == {"base": "not_esphome"}, result["errors"])
+
+        saved = stubs.ConfigEntry(
+            entry_data(username="admin", password="hunter2", login_method="esphome"), unique_id="music", title="Music"
+        )
+        flow = config_flow.IngressProxyConfigFlow(hass, entries=[saved], reconfigure_entry=saved)
+        result = await flow.async_step_reconfigure()
+        suggested = result["data_schema"].suggested
+        check(
+            "reconfigure: login shown, the password never sent to the browser",
+            suggested["login"] == {"username": "admin", "login_method": "esphome"} and "hunter2" not in repr(suggested),
+            suggested,
+        )
+        check("reconfigure: login section open", result["data_schema"].schema["login"].options == {"collapsed": False})
+        client.esphome = FakeEsphome()
+        client.replies.append(FakeUpstream())
+        changed = {key: value for key, value in typed.items() if key != "slug"}
+        result = await flow.async_step_reconfigure(
+            {**changed, "login": {"username": "admin", "password": "", "login_method": "esphome"}}
+        )
+        check("reconfigure: a blank password keeps the saved one", saved.data["password"] == "hunter2", saved.data)
+        check("reconfigure: and logs in with it", client.esphome.logins == [("admin", "hunter2")])
+        client.replies.append(FakeUpstream())
+        await flow.async_step_reconfigure({**changed, "login": {"username": "", "login_method": "esphome"}})
+        check(
+            "reconfigure: clearing the username removes the login",
+            saved.data["username"] == "" and saved.data["password"] == "",
+            saved.data,
+        )
+        result = await config_flow.IngressProxyConfigFlow(hass).async_step_user()
+        check(
+            "form: login section closed when adding",
+            result["data_schema"].schema["login"].options == {"collapsed": True},
         )
 
     asyncio.run(flow_checks())
@@ -807,6 +1058,55 @@ def test_view():
             "view: browser leaves: stops quietly", response.chunks == [b"a"] and not response.eof and upstream.released
         )
 
+        # ---- an app Home Assistant logs in to
+        basic = stubs.ConfigEntry(
+            entry_data(slug="esp", url="http://esphome:6052", username="admin", password="hunter2"), entry_id="3"
+        )
+        await ingress_proxy.async_setup_entry(hass, basic)
+        esp = {SESSION_COOKIE: data.sessions.create("esp", is_admin=True)}
+        browser_login = [("Authorization", "Basic YnJvd3Nlcjp4")]
+        client.replies.append(FakeUpstream(status=401, headers=[("WWW-Authenticate", 'Basic realm="ESPHome"')]))
+        response = await view.get(FakeRequest("/api/ingress_proxy/esp/", cookies=esp, headers=browser_login), "esp")
+        sent = [value for name, value in client.requests[-1]["headers"] if name.lower() == "authorization"]
+        check("view: basic login sent, the browser's replaced", sent == ["Basic YWRtaW46aHVudGVyMg=="], sent)
+        check(
+            "view: no login box for the browser",
+            response.status == 401 and not any(n.lower() == "www-authenticate" for n, _ in response.headers),
+        )
+
+        client.esphome = FakeEsphome()
+        builder = stubs.ConfigEntry(
+            entry_data(
+                slug="esp", url="http://esphome:6052", username="admin", password="hunter2", login_method="esphome"
+            ),
+            entry_id="3",
+        )
+        await ingress_proxy.async_unload_entry(hass, basic)  # what Reconfigure does: reload with the new settings
+        await ingress_proxy.async_setup_entry(hass, builder)
+        esp = {SESSION_COOKIE: data.sessions.create("esp", is_admin=True)}
+        for _ in range(2):
+            client.replies.append(FakeUpstream())
+            await view.get(FakeRequest("/api/ingress_proxy/esp/devices", cookies=esp), "esp")
+        sent = [value for name, value in client.requests[-1]["headers"] if name.lower() == "authorization"]
+        check("view: esphome token sent", sent == ["Bearer token1"], sent)
+        check("view: esphome logged in once", len(client.esphome.logins) == 1)
+        client.replies.append(FakeUpstream(status=401))
+        await view.get(FakeRequest("/api/ingress_proxy/esp/devices", cookies=esp), "esp")
+        client.replies.append(FakeUpstream())
+        await view.get(FakeRequest("/api/ingress_proxy/esp/devices", cookies=esp), "esp")
+        sent = [value for name, value in client.requests[-1]["headers"] if name.lower() == "authorization"]
+        check("view: esphome token refused, logged in again", sent == ["Bearer token2"], sent)
+
+        client.esphome = FakeEsphome(password="changed")
+        data.logins.forget("esp")
+        requests_before = len(client.requests)
+        response = await view.get(FakeRequest("/api/ingress_proxy/esp/", cookies=esp), "esp")
+        check(
+            "view: login refused: 502 that says so, nothing sent to the app",
+            response.status == 502 and "log in" in response.text and len(client.requests) == requests_before,
+        )
+        check("view: and the password isn't in it", "hunter2" not in response.text and "changed" not in response.text)
+
     asyncio.run(checks())
 
 
@@ -822,6 +1122,10 @@ def test_files():
     )
     strings = json.loads((base / "translations/en.json").read_text())["config"]
     used_errors = {
+        "invalid_auth",
+        "invalid_username",
+        "missing_password",
+        "not_esphome",
         "invalid_slug",
         "slug_taken",
         "invalid_title",
@@ -835,7 +1139,8 @@ def test_files():
         "translations: every error has words", used_errors <= set(strings["error"]), used_errors - set(strings["error"])
     )
     for step in ("user", "reconfigure"):
-        fields = set(strings["step"][step]["data"]) | set(strings["step"][step]["sections"]["advanced"]["data"])
+        sections = strings["step"][step]["sections"]
+        fields = set(strings["step"][step]["data"]) | set(sections["advanced"]["data"]) | set(sections["login"]["data"])
         expected = {
             "title",
             "url",
@@ -846,10 +1151,15 @@ def test_files():
             "verify_ssl",
             "headers",
             "local_storage",
+            "username",
+            "password",
+            "login_method",
         }
         if step == "user":
             expected.add("slug")
         check(f"translations: {step} labels every field", fields == expected, fields ^ expected)
+    methods = json.loads((base / "translations/en.json").read_text())["selector"]["login_method"]["options"]
+    check("translations: every login method has words", set(methods) == {"basic", "esphome"}, methods)
     script = (base / "frontend/panel.js").read_text()
     check("panel: asks for the same command", '"ingress_proxy/session"' in script)
     check("panel: deletes the older version's cookie", "Path=/api/ingress_proxy; Max-Age=0" in script)
@@ -864,6 +1174,7 @@ if __name__ == "__main__":
     test_rewrite()
     test_cookies()
     test_sessions()
+    test_logins()
     test_config_flow()
     test_lifecycle_and_command()
     test_view()

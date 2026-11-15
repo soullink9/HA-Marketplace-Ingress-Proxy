@@ -9,7 +9,7 @@ python3 tests/test_release.py
 ```
 
 `test_live_proxy.py` isn't in the workflows: it needs aiohttp (`pip install aiohttp`). Run it by hand after any
-change to `proxy.py` or `client.py`, and before every release.
+change to `proxy.py`, `client.py` or `logins.py`, and before every release.
 
 | Script | What it checks |
 |---|---|

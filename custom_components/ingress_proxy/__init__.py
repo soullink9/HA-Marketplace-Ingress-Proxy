@@ -12,6 +12,7 @@ Set-up overview (see docs/Development.md for the full tour):
     proxy.py         the reverse proxy, HTTP and websockets
     rewrite.py       what is passed on and how it is rewritten, both ways
     cookies.py       the apps' own cookies, kept in Home Assistant or passed to the browser
+    logins.py        Home Assistant's own login to an app (HTTP Basic, or an ESPHome Device Builder token)
     client.py        the HTTP client used to reach the apps
     frontend/panel.js  the sidebar panel: a toolbar and the app's iframe
 """
@@ -92,6 +93,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: IngressProxyConfigEntry
     frontend.async_remove_panel(hass, PANEL_URL_PREFIX + app.slug, warn_if_unknown=False)
     data.apps.pop(app.slug, None)
     data.sessions.forget_app(app.slug)
+    data.logins.forget(app.slug)  # the username or password may be what changed
     return True
 
 

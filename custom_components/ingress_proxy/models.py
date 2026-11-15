@@ -1,4 +1,4 @@
-"""What the integration keeps in memory: the proxied apps, the panel sessions and the upstream cookies."""
+"""What the integration keeps in memory: the proxied apps, the panel sessions, the upstream cookies and logins."""
 
 from __future__ import annotations
 
@@ -6,22 +6,25 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from homeassistant.const import CONF_URL
+from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME
 
 from .const import (
     CONF_HEADERS,
     CONF_ICON,
     CONF_KEEP_PREFIX,
     CONF_LOCAL_STORAGE,
+    CONF_LOGIN_METHOD,
     CONF_PERSIST_LOGIN,
     CONF_REQUIRE_ADMIN,
     CONF_SLUG,
     CONF_TITLE,
     CONF_VERIFY_SSL,
     DEFAULT_ICON,
+    LOGIN_BASIC,
     PROXY_BASE,
 )
 from .cookies import UpstreamCookieJar
+from .logins import UpstreamLogins
 from .sessions import SessionStore
 
 
@@ -39,6 +42,11 @@ class ProxiedApp:
     verify_ssl: bool = True  # check the app's certificate when its URL is https
     headers: Mapping[str, str] = field(default_factory=dict)  # added to every request (an API token, say)
     local_storage: Mapping[str, str] = field(default_factory=dict)  # written to the browser's localStorage
+    # Home Assistant's login to the app (logins.py). Sent only to the app, never to the browser; repr=False keeps
+    # the password out of logs and error messages that print the app.
+    username: str = ""  # empty: the proxy doesn't log in
+    password: str = field(default="", repr=False)
+    login_method: str = LOGIN_BASIC
 
     @classmethod
     def from_entry_data(cls, data: Mapping[str, Any]) -> ProxiedApp:
@@ -54,6 +62,9 @@ class ProxiedApp:
             verify_ssl=data.get(CONF_VERIFY_SSL, True),
             headers=dict(data.get(CONF_HEADERS) or {}),
             local_storage=dict(data.get(CONF_LOCAL_STORAGE) or {}),
+            username=data.get(CONF_USERNAME) or "",
+            password=data.get(CONF_PASSWORD) or "",
+            login_method=data.get(CONF_LOGIN_METHOD) or LOGIN_BASIC,
         )
 
     @property
@@ -68,4 +79,5 @@ class IngressProxyData:
 
     cookie_jar: UpstreamCookieJar
     sessions: SessionStore = field(default_factory=SessionStore)
+    logins: UpstreamLogins = field(default_factory=UpstreamLogins)
     apps: dict[str, ProxiedApp] = field(default_factory=dict)  # by slug; one per loaded config entry

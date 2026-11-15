@@ -24,6 +24,30 @@ the app's published port instead of its internal one, or the app isn't running. 
 The app uses HTTPS with a self-signed certificate. Turn off **Verify the app's SSL certificate** under **Advanced**,
 or use the app's plain `http://` address if it has one inside your Docker network.
 
+## "The app refused the username or password"
+
+Saving checked the login under **Login** and the app said no. Check the username and password (they're case
+sensitive), and **How to log in**: an ESPHome Device Builder needs **ESPHome Device Builder**, most other apps
+**HTTP Basic**. An ESPHome Device Builder also refuses for a while after several wrong passwords.
+
+## "No ESPHome Device Builder answered at that address"
+
+**How to log in** is **ESPHome Device Builder**, but the app at that address isn't one: it's the older dashboard
+built into ESPHome (choose **HTTP Basic**), or the address points at something else.
+
+## "Home Assistant couldn't log in to ..." (502)
+
+The app worked when it was saved but refuses the login now, usually because its password changed. Enter the new one
+with **Reconfigure**. The log has a warning with the reason the app gave.
+
+## The app still asks for its login
+
+- Check a username is set under **Login**; Reconfigure leaves the password empty, which keeps the saved one.
+- An ESPHome Device Builder showing its login screen means **How to log in** is **HTTP Basic**: choose **ESPHome
+  Device Builder**.
+- Some apps only take a login on their own form and ignore HTTP Basic. Keep **Remember the app's login in Home
+  Assistant** on and log in once in the panel instead.
+
 ## "Ingress Proxy: no valid session"
 
 The page was opened without its panel, or its session ran out:

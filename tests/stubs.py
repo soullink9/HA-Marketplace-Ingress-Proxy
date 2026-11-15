@@ -88,9 +88,15 @@ if not REAL_AIOHTTP:
     class DummyCookieJar:
         pass
 
+    class WSServerHandshakeError(ClientError):
+        def __init__(self, status=400):
+            super().__init__(f"handshake refused with {status}")
+            self.status = status
+
     class WSMsgType(Enum):
         TEXT = 1
         BINARY = 2
+        CLOSE = 8
         ERROR = 258
 
     class Response:
@@ -144,6 +150,7 @@ if not REAL_AIOHTTP:
         ClientSession=object,
         ClientWebSocketResponse=object,
         WSMsgType=WSMsgType,
+        WSServerHandshakeError=WSServerHandshakeError,
         web=web,
     )
 
@@ -181,7 +188,7 @@ def callback(func):
 
 
 _module("homeassistant")
-_module("homeassistant.const", CONF_URL="url")
+_module("homeassistant.const", CONF_URL="url", CONF_USERNAME="username", CONF_PASSWORD="password")
 _module("homeassistant.core", HomeAssistant=HomeAssistant, callback=callback)
 _module("homeassistant.components")
 _module("homeassistant.components.http", HomeAssistantView=HomeAssistantView, StaticPathConfig=StaticPathConfig)
@@ -325,6 +332,11 @@ class _Selector:
 
 class TextSelectorType(str, Enum):
     URL = "url"
+    PASSWORD = "password"
+
+
+class SelectSelectorMode(str, Enum):
+    DROPDOWN = "dropdown"
 
 
 _module(
@@ -334,6 +346,9 @@ _module(
     TextSelector=_Selector,
     TextSelectorConfig=dict,
     TextSelectorType=TextSelectorType,
+    SelectSelector=_Selector,
+    SelectSelectorConfig=dict,
+    SelectSelectorMode=SelectSelectorMode,
 )
 
 

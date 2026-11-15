@@ -15,6 +15,12 @@ CONF_REQUIRE_ADMIN = "require_admin"
 CONF_VERIFY_SSL = "verify_ssl"
 CONF_HEADERS = "headers"
 CONF_LOCAL_STORAGE = "local_storage"
+CONF_LOGIN_METHOD = "login_method"  # with CONF_USERNAME and CONF_PASSWORD from homeassistant.const
+
+# How the proxy logs in to an app that has a username (see logins.py).
+LOGIN_BASIC = "basic"  # HTTP Basic on every request: most apps, and the older ESPHome dashboard
+LOGIN_ESPHOME = "esphome"  # ESPHome Device Builder: log in once over its websocket, then send the token it gives
+LOGIN_METHODS = (LOGIN_BASIC, LOGIN_ESPHOME)
 
 DEFAULT_ICON = "mdi:application"
 
@@ -47,5 +53,6 @@ STREAM_CHUNK_BYTES = 64 * 1024
 # (live logs, server-sent events, large downloads), and those must not be cut off.
 CONNECT_TIMEOUT_SECONDS = 10
 
-# How long the setup form waits for the app before saying it can't be reached.
+# How long the setup form waits for the app before saying it can't be reached. Logging in to an app (logins.py)
+# gets the same time.
 CHECK_TIMEOUT_SECONDS = 10

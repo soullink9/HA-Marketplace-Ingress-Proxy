@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- New: a **Login** section in the app's settings. Give an app's username and password and Home Assistant logs in to
+  it itself, so the app never asks for them in the browser, and the password never reaches the browser. **HTTP
+  Basic** suits most apps and the older ESPHome dashboard; **ESPHome Device Builder** logs in to the dashboard of newer
+  ESPHome releases and sends the token it gets on every request and websocket. Saving checks the login, and
+  Reconfigure keeps the saved password unless a new one is typed.
+
 ### Repository
 
 - Gitea is the main copy: its runner checks every push and publishes releases (`.gitea/workflows/`), with nothing

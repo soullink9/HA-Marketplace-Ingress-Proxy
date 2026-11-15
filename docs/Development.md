@@ -15,9 +15,11 @@ web server.
 - the panel script folder, served at `/ingress_proxy_static/`
 - the `ingress_proxy/session` websocket command
 - the session store (`sessions.py`) and the kept-cookie jar (`cookies.py`), loaded from `.storage/ingress_proxy.cookies`
+- the app logins (`logins.py`): the ESPHome Device Builder tokens, in memory only
 
 `async_setup_entry` (per app) turns the entry's data into a `ProxiedApp`, adds it to `IngressProxyData.apps`, and
-registers its panel. `async_unload_entry` removes the panel and the app and ends the app's sessions, so Reconfigure
+registers its panel. `async_unload_entry` removes the panel and the app, ends the app's sessions and forgets its
+login token, so Reconfigure
 (which reloads the entry) takes effect at once. `async_remove_entry` deletes the app's kept cookies.
 
 ## Opening a panel
@@ -53,7 +55,10 @@ the background, and when Home Assistant's websocket reconnects.
 4. `rewrite.upstream_url` builds the app's URL; `rewrite.request_headers` builds the headers: the browser's, minus
    those in `REQUEST_HEADERS_TO_DROP`, plus the forwarded headers, the cookies (the browser's without the session
    cookie, plus the kept ones) and the app's extra headers.
-5. A websocket upgrade goes to `_proxy_websocket`, anything else to `_proxy_http`.
+5. For an app with a username, `logins.UpstreamLogins.async_authorization` gives the `Authorization` header (HTTP
+   Basic, or `Bearer <token>` for an ESPHome Device Builder, logging in first if there's no token yet), and
+   `rewrite.with_authorization` makes it the only one. A login the app refuses is a 502 that says so.
+6. A websocket upgrade goes to `_proxy_websocket`, anything else to `_proxy_http`.
 
 `_proxy_http` sends the request with the body streamed straight through, and streams the reply back in 64 KiB chunks
 as it arrives. Reply headers go through `rewrite.response_headers` (drops `RESPONSE_HEADERS_TO_DROP`, rewrites
@@ -65,6 +70,24 @@ than finished, so the browser knows the reply is incomplete.
 websocket with the subprotocol the app chose. `_relay` runs two `_pump` tasks, one each way. When one side closes,
 its pump closes the other side with the same close code (`rewrite.close_code_to_send` turns codes that may not be sent,
 such as 1006, into 1000), then both tasks are cancelled and awaited so neither outlives the request.
+
+## Logging in to an app
+
+An app with a username under **Login** is logged in to by Home Assistant, never by the browser (`logins.py`):
+
+- **HTTP Basic** puts the username and password in `Authorization` on every request and websocket upgrade. The older
+  ESPHome dashboard checked it on every page and websocket.
+- **ESPHome Device Builder** accepts a username and password only through the `auth/login` command on its `/ws`
+  websocket, and a browser's websocket can't send headers. So `async_esphome_login` opens a websocket of its own,
+  reads the server-info message (`requires_auth` false: no password set, nothing to do), sends `auth/login`, and keeps
+  the token from the reply. The token goes as `Authorization: Bearer <token>`, which the Device Builder takes on every
+  request and on the websocket upgrade, and then tells the page it's logged in, so its login screen never shows.
+  One lock per app means a page load that starts many requests at once logs in once, and after a failed login the
+  proxy waits a minute before trying again (the Device Builder locks out an address after a few failures).
+- A token stops working when someone presses **Log out** in the Device Builder. A 401 from the app makes the proxy
+  forget it, so the next request logs in again; on `/ws`, `_esphome_logged_in` reads the first message, and if it
+  says a login is needed, logs in again and reconnects before the browser's websocket is accepted.
+- `WWW-Authenticate` is dropped from replies of an app with a login, so the browser never pops up a login box.
 
 ## The HTTP client
 

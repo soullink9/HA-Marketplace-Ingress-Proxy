@@ -23,6 +23,18 @@ Under **Advanced**:
 | Extra request headers | none | Sent with every request to the app, one `name: value` per line. For an app that accepts an API token in a header, this logs everyone in without the app's login page. |
 | Browser storage entries | none | Written to the browser's local storage before the app loads, one `key: value` per line. For an app that keeps its login there. |
 
+Under **Login**, for an app that asks for a username and password (leave it empty otherwise):
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| Username | none | The app's username. Home Assistant logs in to the app itself, so nobody is asked for the app's password in the browser. Clear it to stop logging in. |
+| Password | none | The app's password. It never reaches the browser, and Reconfigure doesn't show it: leave it empty there to keep the saved one. |
+| How to log in | HTTP Basic | **HTTP Basic** sends the username and password with every request: for apps that ask for them in a browser pop-up, and the older ESPHome dashboard. **ESPHome Device Builder** is for the dashboard of newer ESPHome releases: Home Assistant logs in to it once and sends the token it gets with every request and websocket. |
+
+When you save, Home Assistant checks the login too: an app that refuses it stops the form with "The app refused the
+username or password". The login replaces any `Authorization` header the browser sends, and one under **Extra request
+headers**, and the app's own login pop-up is never shown in the browser.
+
 The two Advanced lists are typed like YAML:
 
 ```yaml
@@ -96,3 +108,16 @@ it is. If Zigbee2MQTT has a frontend `auth_token`, pick one of these:
 
 With the proxy in front, the ESPHome dashboard can run without a password of its own, as long as its port isn't
 published to your network: your Home Assistant login guards it.
+
+If it has a password (`ESPHOME_USERNAME` and `ESPHOME_PASSWORD`, or `--username` and `--password`), put them under
+**Login** and Home Assistant logs in for you:
+
+| ESPHome | How to log in |
+| --- | --- |
+| ESPHome Device Builder, the dashboard of newer ESPHome releases | **ESPHome Device Builder** |
+| The older dashboard, built into ESPHome itself | **HTTP Basic** |
+
+If you pick the wrong one: for the older dashboard, saving says no ESPHome Device Builder answered (pick **HTTP
+Basic**); for the Device Builder, the panel still shows ESPHome's login screen (pick **ESPHome Device Builder**). The ESPHome add-on opened
+through Home Assistant's own ingress needs neither: point the proxy at a port the add-on publishes, which has the
+add-on's password.

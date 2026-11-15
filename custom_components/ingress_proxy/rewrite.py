@@ -6,9 +6,12 @@ Kept apart from the proxy view and free of aiohttp, so every rule can be read in
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlsplit
 
-from .models import ProxiedApp
+if TYPE_CHECKING:
+    # Only for type hints: models.py imports logins.py, which uses this module.
+    from .models import ProxiedApp
 
 # Headers that only describe one hop of the connection, never passed on (RFC 9110, section 7.6.1).
 HOP_BY_HOP = frozenset(
@@ -123,12 +126,32 @@ def request_headers(
     return headers
 
 
+def with_authorization(headers: list[tuple[str, str]], authorization: str | None) -> list[tuple[str, str]]:
+    """The headers with Home Assistant's login to the app (logins.py) as the only Authorization header.
+
+    The login replaces any Authorization the browser sent or the app's extra headers hold: the app should see one
+    login, and the one the settings asked for. With no login (None), the headers are left as they are.
+    """
+    if authorization is None:
+        return headers
+    kept = [(name, value) for name, value in headers if name.lower() != "authorization"]
+    kept.append(("Authorization", authorization))
+    return kept
+
+
 def response_headers(incoming: Iterable[tuple[str, str]], app: ProxiedApp) -> list[tuple[str, str]]:
-    """The app's response headers to pass to the browser, with Location and Content-Security-Policy adjusted."""
+    """The app's response headers to pass to the browser, with Location and Content-Security-Policy adjusted.
+
+    WWW-Authenticate is dropped too when Home Assistant logs in to the app itself.
+    """
     headers = []
     for name, value in incoming:
         lower = name.lower()
         if lower in RESPONSE_HEADERS_TO_DROP:
+            continue
+        if lower == "www-authenticate" and app.username:
+            # Home Assistant logs in to this app itself. Passed on, the challenge would make the browser pop up a
+            # login box whose answer the proxy replaces anyway.
             continue
         if lower == "location":
             value = rewrite_location(value, app)

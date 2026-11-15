@@ -15,6 +15,7 @@ custom_components/ingress_proxy/
 ├── proxy.py          The proxy view: HTTP streaming and the websocket relay
 ├── rewrite.py        What is passed on and how it's rewritten, both ways (no aiohttp, easy to test)
 ├── cookies.py        Set-Cookie parsing, the browser rewrite, and the kept-cookie jar
+├── logins.py         Home Assistant's own login to an app: HTTP Basic, or an ESPHome Device Builder token
 ├── client.py         The proxy's own HTTP client sessions
 ├── frontend/panel.js The sidebar panel: toolbar, session handling, the app's iframe
 ├── manifest.json     Integration metadata (bump "version" on every release)
@@ -37,6 +38,7 @@ scripts/                 The release helpers both release workflows use (see Rel
 | --- | --- |
 | Which headers are passed on or dropped, redirects, the security policy | `rewrite.py` |
 | How the app's cookies are kept or rewritten | `cookies.py` |
+| How Home Assistant logs in to an app (a new login method) | `logins.py`, `LOGIN_METHODS` in `const.py`, the `login_method` options in `translations/en.json` |
 | Who may open an app, how long sessions last | `websocket.py`, `sessions.py`, `const.py` (`SESSION_TTL_SECONDS`) and `RENEW_EVERY_MS` in `panel.js` |
 | A new setting | `const.py`, `models.py` (`ProxiedApp`), `config_flow.py`, `translations/en.json`, [Configuration](docs/Configuration.md) |
 | The toolbar or the error message in the panel | `frontend/panel.js` |
@@ -81,8 +83,9 @@ python3 tests/test_live_proxy.py
 
 Needs aiohttp, the web library Home Assistant runs on, so neither Gitea nor GitHub runs it. It starts a fake app and Home Assistant's web server with the
 real proxy view on 127.0.0.1, and acts as a browser: redirects, kept and passed-on cookies, a 1 MiB upload, gzip
-passing through, streaming, an app breaking off mid-reply, security headers, and websockets with subprotocols,
-binary messages and close codes in both directions. Run it after any change to `proxy.py` or `client.py`.
+passing through, streaming, an app breaking off mid-reply, security headers, websockets with subprotocols,
+binary messages and close codes in both directions, and logging in to an app with HTTP Basic and to a fake ESPHome
+Device Builder. Run it after any change to `proxy.py`, `client.py` or `logins.py`.
 
 Neither test runs a real Home Assistant or a real browser. Try changes on a real installation too, with an app or two
 you use, before releasing.

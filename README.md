@@ -33,6 +33,9 @@ For every app you add:
 - **Optional: stay logged in to the app itself.** For apps with their own login, Home Assistant can remember that login
   so you log in once and stay logged in on every device. Apps that keep their login in the browser's storage can have
   it written there for them.
+- **Optional: Home Assistant logs in for you.** Give an app's username and password, and Home Assistant logs in to it
+  itself, with HTTP Basic or as an ESPHome Device Builder expects, so the app never asks. The password never reaches
+  the browser.
 
 ## Requirements
 

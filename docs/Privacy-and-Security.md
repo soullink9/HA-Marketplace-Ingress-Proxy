@@ -49,6 +49,19 @@ With **Remember the app's login in Home Assistant** on, the app's cookies are ke
 With it off, the browser keeps the app's cookies, limited to the app's own path on Home Assistant's address, and every
 person logs in to the app separately.
 
+## App logins
+
+A username and password under **Login** are saved in the app's config entry, like any integration's credentials
+(`/config/.storage/core.config_entries`). Home Assistant uses them only on its own requests to the app:
+
+- They go to the app in the `Authorization` header, and nowhere else. The browser never gets them: not in a reply,
+  not in the form (Reconfigure leaves the password field empty), not in the logs.
+- For an ESPHome Device Builder, Home Assistant logs in once and keeps the token it gets in memory only, sending it
+  instead of the password. A restart, or changing the app, makes it log in again.
+- The app's login pop-up (`WWW-Authenticate`) isn't passed to the browser, since its answer would be replaced anyway.
+- **Everyone who can open the panel uses that login.** Like a remembered login, keep **Administrators only** on when
+  the account matters.
+
 ## Headers and browser storage entries
 
 Both are saved in the app's config entry, like any integration's credentials.
@@ -62,4 +75,5 @@ Both are saved in the app's config entry, like any integration's credentials.
 
 The proxy logs, at debug level only, the method, app address and status of each request, and when websockets open
 and close. The address includes any query string, so check debug logs before sharing them if an app puts tokens
-there. Headers, cookies and the content of requests and messages are never logged.
+there. Headers, cookies, passwords and the content of requests and messages are never logged. A login the app
+refuses is logged as a warning with the app's title and the reason the app gave, never the password.

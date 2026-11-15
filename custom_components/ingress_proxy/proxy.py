@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from urllib.parse import urlsplit
 
 import aiohttp
 from aiohttp import WSMsgType, web
@@ -15,8 +16,9 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .client import async_get_client
-from .const import PROXY_BASE, SESSION_COOKIE, STREAM_CHUNK_BYTES
+from .const import LOGIN_ESPHOME, PROXY_BASE, SESSION_COOKIE, STREAM_CHUNK_BYTES
 from .cookies import rewrite_for_browser, values_named
+from .logins import ESPHOME_WEBSOCKET_PATH, LoginRefused, NotEsphome, esphome_wants_login
 from .models import IngressProxyData, ProxiedApp
 from .rewrite import (
     close_code_to_send,
@@ -25,6 +27,7 @@ from .rewrite import (
     response_headers,
     upstream_url,
     websocket_url,
+    with_authorization,
 )
 from .sessions import Session
 
@@ -34,6 +37,9 @@ _LOGGER = logging.getLogger(__name__)
 UPSTREAM_ERRORS = (aiohttp.ClientError, TimeoutError)
 
 NO_SESSION_TEXT = "Ingress Proxy: no valid session. Open this app from its panel in the Home Assistant sidebar."
+
+# What logging in to the app can fail with, besides the app being down.
+LOGIN_ERRORS = (LoginRefused, NotEsphome)
 
 
 class IngressProxyView(HomeAssistantView):
@@ -90,6 +96,22 @@ class IngressProxyView(HomeAssistantView):
             forwarded_for=request.remote,
         )
 
+        client = async_get_client(self.hass, app.verify_ssl)
+        try:
+            authorization = await self.data.logins.async_authorization(client, app)
+        except UPSTREAM_ERRORS as err:
+            _LOGGER.debug("Logging in to %s failed: %r", app.slug, err)
+            return web.Response(status=502, text=f"Ingress Proxy: {app.title} can't be reached right now.")
+        except LOGIN_ERRORS as err:
+            # logins.py has logged it as a warning, once per try (at most once a minute).
+            _LOGGER.debug("Logging in to %s refused: %s", app.slug, err)
+            return web.Response(
+                status=502,
+                text=f"Ingress Proxy: Home Assistant couldn't log in to {app.title}. "
+                "Check its username and password with Reconfigure.",
+            )
+        headers = with_authorization(headers, authorization)
+
         if request.headers.get("Upgrade", "").lower() == "websocket":
             return await self._proxy_websocket(request, app, target, headers)
         return await self._proxy_http(request, app, target, headers)
@@ -136,6 +158,10 @@ class IngressProxyView(HomeAssistantView):
 
         async with upstream:
             _LOGGER.debug("%s %s -> %s", request.method, target, upstream.status)
+            if upstream.status == 401 and app.username and app.login_method == LOGIN_ESPHOME:
+                # The Device Builder no longer takes the proxy's token (someone pressed Log out, say). This reply
+                # goes through as it is; the next request logs in again.
+                self.data.logins.forget(app.slug)
             set_cookies = upstream.headers.getall("Set-Cookie", [])
             out = response_headers(upstream.headers.items(), app)
             if app.persist_login:
@@ -177,15 +203,24 @@ class IngressProxyView(HomeAssistantView):
             if protocol.strip()
         ]
         client = async_get_client(self.hass, app.verify_ssl)
+        first_message = None
         try:
             # max_msg_size=0: no size limit, so the proxy never refuses a message the app itself accepts.
             upstream = await client.ws_connect(
                 websocket_url(target), headers=headers, protocols=protocols, max_msg_size=0
             )
+            is_esphome_websocket = urlsplit(target).path.endswith(ESPHOME_WEBSOCKET_PATH)
+            if app.username and app.login_method == LOGIN_ESPHOME and is_esphome_websocket:
+                upstream, first_message = await self._esphome_logged_in(
+                    client, app, target, headers, protocols, upstream
+                )
         except UPSTREAM_ERRORS as err:
             # This also covers the app refusing the upgrade (WSServerHandshakeError).
             _LOGGER.debug("Websocket to %s failed: %r", target, err)
             return web.Response(status=502, text=f"Ingress Proxy: {app.title} can't be reached right now.")
+        except LOGIN_ERRORS as err:
+            _LOGGER.debug("Logging in to %s refused: %s", app.slug, err)
+            return web.Response(status=502, text=f"Ingress Proxy: Home Assistant couldn't log in to {app.title}.")
 
         async with upstream:
             # Offer the browser only the subprotocol the app picked, so both ends agree.
@@ -196,9 +231,42 @@ class IngressProxyView(HomeAssistantView):
             browser = web.WebSocketResponse(protocols=browser_protocols, max_msg_size=0)
             await browser.prepare(request)
             _LOGGER.debug("Websocket open: %s", target)
+            if first_message is not None:
+                await browser.send_str(first_message)
             await _relay(browser, upstream)
             _LOGGER.debug("Websocket closed: %s (browser %s, app %s)", target, browser.close_code, upstream.close_code)
         return browser
+
+    async def _esphome_logged_in(
+        self,
+        client: aiohttp.ClientSession,
+        app: ProxiedApp,
+        target: str,
+        headers: list[tuple[str, str]],
+        protocols: list[str],
+        upstream: aiohttp.ClientWebSocketResponse,
+    ) -> tuple[aiohttp.ClientWebSocketResponse, str | None]:
+        """Make sure an ESPHome Device Builder websocket is logged in, and return it with its first message.
+
+        The Device Builder accepts every websocket, then says in its first message whether the connection still has
+        to log in. If it does, the proxy's token is no longer good (someone pressed Log out, say): log in again and
+        reconnect once, so the page never shows the login screen. The first message has been read here, so it's
+        returned for the relay to send on to the browser.
+        """
+        message = await upstream.receive()
+        if message.type is not WSMsgType.TEXT:
+            return upstream, None  # not the server info; nothing to check, and a close is relayed as usual
+        if not esphome_wants_login(message.data):
+            return upstream, message.data
+
+        await upstream.close()
+        self.data.logins.forget(app.slug)
+        headers = with_authorization(headers, await self.data.logins.async_authorization(client, app))
+        upstream = await client.ws_connect(websocket_url(target), headers=headers, protocols=protocols, max_msg_size=0)
+        message = await upstream.receive()
+        if message.type is not WSMsgType.TEXT:
+            return upstream, None
+        return upstream, message.data
 
 
 async def _relay(browser: web.WebSocketResponse, upstream: aiohttp.ClientWebSocketResponse) -> None:
