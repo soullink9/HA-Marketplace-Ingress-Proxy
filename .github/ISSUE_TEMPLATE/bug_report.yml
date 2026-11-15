@@ -7,7 +7,7 @@ body:
     attributes:
       label: Versions
       description: Home Assistant (Settings → About) and this integration ("version" in custom_components/ingress_proxy/manifest.json).
-      placeholder: Home Assistant 2026.11.1, integration 1.3.0
+      placeholder: Home Assistant 2026.11.1, integration 1.4.0
     validations:
       required: true
   - type: input

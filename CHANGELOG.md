@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 (2026-11-15)
 
 **Needs Home Assistant 2026.11 or newer.** Only the latest Home Assistant release is supported from now on; the
 Marketplace keeps offering 1.3.0 to older installations.
