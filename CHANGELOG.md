@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.5.0 (2026-11-22)
+
+Security hardening, from an outside security review. **Read before updating:** remembered app logins are now kept
+for each Home Assistant user, so everyone logs in to such apps once more after updating.
+
+- **Remembered logins are per user.** With **Remember the app's login in Home Assistant** on, each Home Assistant user
+  now has their own login to the app: one user's login (an administrator's, say) is never sent on another user's
+  requests, and logging out of the app logs out only you. The shared logins kept by earlier versions are deleted when
+  Home Assistant starts, since nobody can tell whose they are. Deleting a Home Assistant user deletes theirs.
+- **Changes to a Home Assistant user apply at once.** The proxy checks the user behind a panel session on every
+  request, so a user who is deleted, deactivated, or no longer an administrator (for an administrators-only app) is
+  shut out straight away instead of when their session runs out.
+- **Redirects stay inside the app.** A redirect from the app to another site, to another part of Home Assistant, or
+  climbing out with `..`, is refused with a 502 instead of being followed by the browser.
+- **The app's cookies stay inside the app.** A cookie's path is always kept under the app's own path (also with **Keep
+  the /api/ingress_proxy/slug path** on), and cookies named `__Host-…` or `__Secure-…` are dropped.
+- **Each app has its own session cookie** (`ingress_proxy_session_<slug>`), and no session cookie ever reaches an app.
+- **Home Assistant's own browser storage keys can't be set.** Browser storage entries named like Home Assistant's
+  login (`hassTokens`) or settings are refused by the form, and never written by the panel.
+- **Cloud metadata services can't be proxied.** An app address that is, or looks up to, `169.254.169.254` or
+  `fd00:ec2::254` is refused. Every other address, including private ones on your network, still works.
+- **Limits**, so one app or page can't tie up Home Assistant: at most 100 requests and 25 websockets open per app (503
+  past that), websocket messages up to 16 MiB (was unlimited), websockets pinged every 30 seconds so dead ones close,
+  and a reply that sends nothing for 5 minutes is given up on.
+- Requests waiting for Home Assistant to log in to an ESPHome Device Builder give up after 20 seconds instead of
+  queueing behind an app that hangs.
+- Debug logs no longer include query strings, where apps sometimes put tokens.
+- [Privacy and Security](docs/Privacy-and-Security.md) describes all of the above, and which addresses an app can have.
+
+### Repository
+
+- GitHub's workflows pin every action, including the Marketplace's checks and `hassfest`, to a commit, and check out
+  without keeping the token. The GitHub release workflow has no permissions by default; only its release job may
+  publish.
+
 ## 1.4.1 (2026-11-15)
 
 - Fixed: updating to 1.4.0 from the Marketplace failed with "The installed content has no usable manifest.json where
