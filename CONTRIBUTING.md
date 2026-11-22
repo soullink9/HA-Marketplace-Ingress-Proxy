@@ -181,6 +181,11 @@ installs from GitHub's releases, so every link in the docs and release notes poi
    down, the mirror catches up later; the Gitea release is already done. Don't make releases or tags on GitHub
    itself: the mirror deletes tags Gitea doesn't have, and GitHub follows Gitea on its own.
 
+GitHub's workflows pin every action to a commit, with the version or branch it was taken from in a comment, so a tag
+or branch that moves can't change what runs. To update one, look up the new commit (`git ls-remote
+https://github.com/hacs/action.git refs/heads/main`, say), replace the hash and the comment, and commit it as
+`chore: update the CI actions`. The release workflow has no permissions by default; only its release job may write.
+
 The Gitea workflows use no actions (`actions/checkout` and the like download from GitHub): each job runs in a plain
 image from Docker Hub (`python:3.14-bookworm`, and `node:20-bookworm` for the panel script) and fetches the code from
 Gitea with git, so testing and releasing keep working when GitHub can't be reached. Only `ruff` comes from PyPI. When
@@ -195,7 +200,7 @@ GitHub, and the GitHub release on it turns into a draft.
 
 - Reply bodies aren't rewritten, so apps that link to their files from the root of the address need a base-path
   setting (see [Configuration](docs/Configuration.md#which-apps-work)).
-- With **Remember the app's login** on, everyone who can open the panel shares one login to the app.
+- An app's **Login** (username and password) is one login for everyone who can open the panel.
 - Kept cookies ignore their own Path, Domain and expiry dates: a kept cookie is sent until the app deletes it.
 
 ## Reporting bugs
