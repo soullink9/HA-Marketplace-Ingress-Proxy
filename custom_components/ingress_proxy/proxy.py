@@ -1,10 +1,13 @@
 """The reverse proxy itself: passes the panel iframe's requests and websockets to the app and back.
 
-Every request is checked for a valid panel session (sessions.py) before anything reaches the app. The rules for
-what is passed on and how it is rewritten are in rewrite.py; this module only moves the bytes.
+Every request is checked for a valid panel session (sessions.py), and the Home Assistant user it belongs to, before
+anything reaches the app. The rules for what is passed on and how it is rewritten are in rewrite.py; this module only
+moves the bytes, within the limits in const.py: how many requests and websockets an app can have open, how big a
+websocket message can be, and how long a reply or websocket can go quiet.
 """
 
 import asyncio
+from collections import Counter
 import logging
 from urllib.parse import urlsplit
 
@@ -14,12 +17,23 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .client import async_get_client
-from .const import LOGIN_ESPHOME, PROXY_BASE, SESSION_COOKIE, STREAM_CHUNK_BYTES
-from .cookies import rewrite_for_browser, values_named
+from .const import (
+    LOGIN_ESPHOME,
+    MAX_REQUESTS_PER_APP,
+    MAX_WEBSOCKETS_PER_APP,
+    PROXY_BASE,
+    STREAM_CHUNK_BYTES,
+    WEBSOCKET_HEARTBEAT_SECONDS,
+    WEBSOCKET_MAX_MESSAGE_BYTES,
+    session_cookie_name,
+)
+from .cookies import is_proxy_cookie, rewrite_for_browser, values_named
 from .logins import ESPHOME_WEBSOCKET_PATH, LoginRefused, NotEsphome, esphome_wants_login
 from .models import IngressProxyData, ProxiedApp
 from .rewrite import (
+    RedirectOutsideApp,
     close_code_to_send,
+    for_log,
     has_parent_segment,
     request_headers,
     response_headers,
@@ -35,6 +49,7 @@ _LOGGER = logging.getLogger(__name__)
 UPSTREAM_ERRORS = (aiohttp.ClientError, TimeoutError)
 
 NO_SESSION_TEXT = "Ingress Proxy: no valid session. Open this app from its panel in the Home Assistant sidebar."
+BUSY_TEXT = "Ingress Proxy: this app has too many connections open through Home Assistant. Try again shortly."
 
 # What logging in to the app can fail with, besides the app being down.
 LOGIN_ERRORS = (LoginRefused, NotEsphome)
@@ -54,6 +69,9 @@ class IngressProxyView(HomeAssistantView):
         """Keep what every request needs."""
         self.hass = hass
         self.data = data
+        # How many requests and websockets each app (by slug) has open through the proxy right now.
+        self._open_requests: Counter[str] = Counter()
+        self._open_websockets: Counter[str] = Counter()
 
     async def _proxy(self, request: web.Request, slug: str, path: str = "") -> web.StreamResponse:
         """Check the session, then pass the request to the app.
@@ -65,8 +83,8 @@ class IngressProxyView(HomeAssistantView):
         if app is None:
             return web.Response(status=404)
 
-        session = self._find_session(request, slug)
-        if session is None or (app.require_admin and not session.is_admin):
+        session = await self._find_session(request, app)
+        if session is None:
             _LOGGER.debug("Refused %s %s: no valid panel session", request.method, request.path)
             return web.Response(status=401, text=NO_SESSION_TEXT)
 
@@ -81,10 +99,31 @@ class IngressProxyView(HomeAssistantView):
         if has_parent_segment(raw_tail):
             return web.Response(status=400)
 
+        is_websocket = request.headers.get("Upgrade", "").lower() == "websocket"
+        if is_websocket:
+            open_now, limit = self._open_websockets, MAX_WEBSOCKETS_PER_APP
+        else:
+            open_now, limit = self._open_requests, MAX_REQUESTS_PER_APP
+        if open_now[slug] >= limit:
+            _LOGGER.debug("Refused %s %s: %s already has %s open", request.method, request.path, slug, limit)
+            return web.Response(status=503, text=BUSY_TEXT, headers={"Retry-After": "5"})
+        open_now[slug] += 1
+        try:
+            return await self._proxy_checked(request, app, session, raw_tail, is_websocket)
+        finally:
+            open_now[slug] -= 1
+            if not open_now[slug]:
+                del open_now[slug]
+
+    async def _proxy_checked(
+        self, request: web.Request, app: ProxiedApp, session: Session, raw_tail: str, is_websocket: bool
+    ) -> web.StreamResponse:
+        """Pass on a request that has been let in: log in to the app if needed, then relay it."""
         target = upstream_url(app, raw_tail, request.rel_url.raw_query_string)
-        cookies = {name: value for name, value in request.cookies.items() if name != SESSION_COOKIE}
+        # No panel session cookie (this app's or another's) ever reaches an app.
+        cookies = {name: value for name, value in request.cookies.items() if not is_proxy_cookie(name)}
         if app.persist_login:
-            cookies.update(self.data.cookie_jar.cookies_for(slug))
+            cookies.update(self.data.cookie_jar.cookies_for(app.slug, session.user_id))
         headers = request_headers(
             request.headers.items(),
             app,
@@ -110,22 +149,27 @@ class IngressProxyView(HomeAssistantView):
             )
         headers = with_authorization(headers, authorization)
 
-        if request.headers.get("Upgrade", "").lower() == "websocket":
+        if is_websocket:
             return await self._proxy_websocket(request, app, target, headers)
-        return await self._proxy_http(request, app, target, headers)
+        return await self._proxy_http(request, app, session, target, headers)
 
-    def _find_session(self, request: web.Request, slug: str) -> Session | None:
-        """The valid panel session the request carries for this app, if any.
+    async def _find_session(self, request: web.Request, app: ProxiedApp) -> Session | None:
+        """The valid panel session the request carries for this app, if its user may still open the app.
 
-        Every value of the session cookie is tried, not only one: a browser can hold the cookie for more than one path
-        (an earlier Ingress Proxy kept one at /api/ingress_proxy for every app), and it sends all of them. The Android
-        web views of apps like the Lena wall display keep such a cookie for good, since they never end the browsing
-        session that would clear it.
+        The user is looked up again on every request, so deleting a user, deactivating them, or taking away their
+        administrator rights for an admins-only app shuts them out at once, even with a token that hasn't run out.
+
+        Every value of the app's session cookie is tried, not only one: a browser that holds the cookie for more than
+        one path sends all of them, and a stale value can come first.
         """
-        for token in values_named(request.headers.getall("Cookie", []), SESSION_COOKIE):
-            session = self.data.sessions.find(token, slug)
-            if session is not None:
-                return session
+        for token in values_named(request.headers.getall("Cookie", []), session_cookie_name(app.slug)):
+            session = self.data.sessions.find(token, app.slug)
+            if session is None:
+                continue
+            user = await self.hass.auth.async_get_user(session.user_id)
+            if user is None or not user.is_active or (app.require_admin and not user.is_admin):
+                return None
+            return session
         return None
 
     # Home Assistant adds a route for each of these method names the view has, so every method goes to _proxy.
@@ -138,7 +182,7 @@ class IngressProxyView(HomeAssistantView):
     options = _proxy
 
     async def _proxy_http(
-        self, request: web.Request, app: ProxiedApp, target: str, headers: list[tuple[str, str]]
+        self, request: web.Request, app: ProxiedApp, session: Session, target: str, headers: list[tuple[str, str]]
     ) -> web.StreamResponse:
         """Pass an HTTP request to the app, and stream its reply back as it arrives."""
         client = async_get_client(self.hass, app.verify_ssl)
@@ -151,19 +195,27 @@ class IngressProxyView(HomeAssistantView):
                 allow_redirects=False,  # the browser follows redirects itself, through the proxy
             )
         except UPSTREAM_ERRORS as err:
-            _LOGGER.debug("%s %s failed: %r", request.method, target, err)
+            _LOGGER.debug("%s %s failed: %r", request.method, for_log(target), err)
             return web.Response(status=502, text=f"Ingress Proxy: {app.title} can't be reached right now.")
 
         async with upstream:
-            _LOGGER.debug("%s %s -> %s", request.method, target, upstream.status)
+            _LOGGER.debug("%s %s -> %s", request.method, for_log(target), upstream.status)
             if upstream.status == 401 and app.username and app.login_method == LOGIN_ESPHOME:
                 # The Device Builder no longer takes the proxy's token (someone pressed Log out, say). This reply
                 # goes through as it is; the next request logs in again.
                 self.data.logins.forget(app.slug)
             set_cookies = upstream.headers.getall("Set-Cookie", [])
-            out = response_headers(upstream.headers.items(), app)
+            try:
+                out = response_headers(
+                    upstream.headers.items(), app, request_path=request.rel_url.raw_path, public_host=request.host
+                )
+            except RedirectOutsideApp as err:
+                _LOGGER.debug("%s %s: refused a redirect outside the app: %s", request.method, for_log(target), err)
+                return web.Response(
+                    status=502, text=f"Ingress Proxy: {app.title} tried to send the browser outside the app."
+                )
             if app.persist_login:
-                self.data.cookie_jar.update(app.slug, set_cookies)
+                self.data.cookie_jar.update(app.slug, session.user_id, set_cookies)
             else:
                 for header in set_cookies:
                     rewritten = rewrite_for_browser(header, app.prefix, app.keep_prefix)
@@ -182,7 +234,7 @@ class IngressProxyView(HomeAssistantView):
                 # The app failed part-way. The status line has already gone to the browser, so the honest
                 # answer is to cut the connection: the browser then knows the reply is incomplete instead of
                 # keeping a truncated page or file as if it were whole.
-                _LOGGER.debug("%s %s broke off mid-reply: %r", request.method, target, err)
+                _LOGGER.debug("%s %s broke off mid-reply: %r", request.method, for_log(target), err)
                 if request.transport is not None:
                     request.transport.close()
                 return response
@@ -203,9 +255,12 @@ class IngressProxyView(HomeAssistantView):
         client = async_get_client(self.hass, app.verify_ssl)
         first_message = None
         try:
-            # max_msg_size=0: no size limit, so the proxy never refuses a message the app itself accepts.
             upstream = await client.ws_connect(
-                websocket_url(target), headers=headers, protocols=protocols, max_msg_size=0
+                websocket_url(target),
+                headers=headers,
+                protocols=protocols,
+                max_msg_size=WEBSOCKET_MAX_MESSAGE_BYTES,
+                heartbeat=WEBSOCKET_HEARTBEAT_SECONDS,
             )
             is_esphome_websocket = urlsplit(target).path.endswith(ESPHOME_WEBSOCKET_PATH)
             if app.username and app.login_method == LOGIN_ESPHOME and is_esphome_websocket:
@@ -214,7 +269,7 @@ class IngressProxyView(HomeAssistantView):
                 )
         except UPSTREAM_ERRORS as err:
             # This also covers the app refusing the upgrade (WSServerHandshakeError).
-            _LOGGER.debug("Websocket to %s failed: %r", target, err)
+            _LOGGER.debug("Websocket to %s failed: %r", for_log(target), err)
             return web.Response(status=502, text=f"Ingress Proxy: {app.title} can't be reached right now.")
         except LOGIN_ERRORS as err:
             _LOGGER.debug("Logging in to %s refused: %s", app.slug, err)
@@ -226,13 +281,19 @@ class IngressProxyView(HomeAssistantView):
                 browser_protocols: tuple[str, ...] = (upstream.protocol,)
             else:
                 browser_protocols = ()
-            browser = web.WebSocketResponse(protocols=browser_protocols, max_msg_size=0)
+            browser = web.WebSocketResponse(
+                protocols=browser_protocols,
+                max_msg_size=WEBSOCKET_MAX_MESSAGE_BYTES,
+                heartbeat=WEBSOCKET_HEARTBEAT_SECONDS,
+            )
             await browser.prepare(request)
-            _LOGGER.debug("Websocket open: %s", target)
+            _LOGGER.debug("Websocket open: %s", for_log(target))
             if first_message is not None:
                 await browser.send_str(first_message)
             await _relay(browser, upstream)
-            _LOGGER.debug("Websocket closed: %s (browser %s, app %s)", target, browser.close_code, upstream.close_code)
+            _LOGGER.debug(
+                "Websocket closed: %s (browser %s, app %s)", for_log(target), browser.close_code, upstream.close_code
+            )
         return browser
 
     async def _esphome_logged_in(
@@ -260,7 +321,13 @@ class IngressProxyView(HomeAssistantView):
         await upstream.close()
         self.data.logins.forget(app.slug)
         headers = with_authorization(headers, await self.data.logins.async_authorization(client, app))
-        upstream = await client.ws_connect(websocket_url(target), headers=headers, protocols=protocols, max_msg_size=0)
+        upstream = await client.ws_connect(
+            websocket_url(target),
+            headers=headers,
+            protocols=protocols,
+            max_msg_size=WEBSOCKET_MAX_MESSAGE_BYTES,
+            heartbeat=WEBSOCKET_HEARTBEAT_SECONDS,
+        )
         message = await upstream.receive()
         if message.type is not WSMsgType.TEXT:
             return upstream, None

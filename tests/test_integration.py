@@ -11,6 +11,7 @@ covered by test_live_proxy.py, which needs aiohttp. Prints PASS/FAIL per check a
 import asyncio
 from datetime import UTC, datetime
 import json
+import logging
 from pathlib import Path
 import sys
 import types
@@ -23,10 +24,11 @@ import aiohttp  # noqa: E402  (the stand-in)
 import ingress_proxy  # noqa: E402
 from ingress_proxy import config_flow, cookies, logins, proxy, rewrite, sessions, websocket  # noqa: E402
 from ingress_proxy.client import async_get_client  # noqa: E402
-from ingress_proxy.const import SESSION_COOKIE, SESSION_TTL_SECONDS  # noqa: E402
+from ingress_proxy.const import READ_IDLE_TIMEOUT_SECONDS, SESSION_TTL_SECONDS, session_cookie_name  # noqa: E402
 from ingress_proxy.models import ProxiedApp  # noqa: E402
 
 FAILURES = []
+SESSION_COOKIE = session_cookie_name("music")
 
 
 def check(name, condition, detail=""):
@@ -127,7 +129,7 @@ def test_rewrite():
         ("Link", "</a.css>; rel=preload"),
         ("Link", "</b.js>; rel=preload"),
     ]
-    out = rewrite.response_headers(reply, MUSIC)
+    out = rewrite.response_headers(reply, MUSIC, "/api/ingress_proxy/music/x", "ha.example")
     names = [name.lower() for name, _ in out]
     check(
         "response: headers that would act on Home Assistant dropped",
@@ -148,18 +150,23 @@ def test_rewrite():
     check("response: Location rewritten", ("Location", "/api/ingress_proxy/music/login") in out)
     check("response: frame-ancestors removed, rest kept", ("Content-Security-Policy", "default-src 'self'") in out)
     check("response: repeated headers kept", names.count("link") == 2)
-    only_frame = rewrite.response_headers([("Content-Security-Policy", "frame-ancestors 'self'")], MUSIC)
+    only_frame = rewrite.response_headers(
+        [("Content-Security-Policy", "frame-ancestors 'self'")], MUSIC, "/api/ingress_proxy/music/", "ha.example"
+    )
     check("response: a policy of only frame-ancestors is dropped", only_frame == [])
 
+    # Redirects: (app, Location, what the browser gets). The page asked for is <prefix>/dir/page on ha.example.
     cases = [
         (MUSIC, "/login", "/api/ingress_proxy/music/login"),
         (MUSIC, "http://music:8095/a?b=1", "/api/ingress_proxy/music/a?b=1"),
         (MUSIC, "http://music:8095", "/api/ingress_proxy/music/"),
         (MUSIC, "/api/ingress_proxy/music/x", "/api/ingress_proxy/music/x"),
-        (MUSIC, "https://elsewhere.example/x", "https://elsewhere.example/x"),
-        (MUSIC, "//elsewhere.example/x", "//elsewhere.example/x"),
-        (MUSIC, "next", "next"),
-        (MUSIC, "http://music:80950/x", "http://music:80950/x"),
+        (MUSIC, "next", "/api/ingress_proxy/music/dir/next"),
+        (MUSIC, "../up?x=1", "/api/ingress_proxy/music/up?x=1"),
+        (MUSIC, "?page=2", "/api/ingress_proxy/music/dir/page?page=2"),
+        (MUSIC, "https://ha.example/api/ingress_proxy/music/a", "/api/ingress_proxy/music/a"),
+        (MUSIC, "//HA.example/api/ingress_proxy/music/a", "/api/ingress_proxy/music/a"),
+        (MUSIC, "  /spaced ", "/api/ingress_proxy/music/spaced"),
         (MUSIC_PREFIXED, "/api/ingress_proxy/music/x", "/api/ingress_proxy/music/x"),
         (MUSIC_PREFIXED, "http://music:8095/api/ingress_proxy/music/x", "/api/ingress_proxy/music/x"),
         (WITH_PATH, "/ui/settings", "/api/ingress_proxy/z2m/settings"),
@@ -167,8 +174,32 @@ def test_rewrite():
         (WITH_PATH, "/other", "/api/ingress_proxy/z2m/other"),
     ]
     for app, location, expected in cases:
-        got = rewrite.rewrite_location(location, app)
+        got = rewrite.rewrite_location(location, app, app.prefix + "/dir/page", "ha.example")
         check(f"location: {app.slug} {location}", got == expected, got)
+    outside = [
+        (MUSIC, "https://elsewhere.example/x"),
+        (MUSIC, "//elsewhere.example/x"),
+        (MUSIC, "/\\elsewhere.example/x"),
+        (MUSIC, "\\\\elsewhere.example/x"),
+        (MUSIC, "http://music:80950/x"),
+        (MUSIC, "https://ha.example/config"),
+        (MUSIC, "https://ha.example/api/ingress_proxy/musicbox/"),
+        (MUSIC, "javascript:alert(1)"),
+        (MUSIC, "../../../../config"),
+        (MUSIC, "/../../config"),
+        (MUSIC, "/%2e%2e/%2e%2e/config"),
+        (MUSIC_PREFIXED, "/"),
+        (MUSIC_PREFIXED, "/api/ingress_proxy/other/"),
+    ]
+    for app, location in outside:
+        try:
+            got = rewrite.rewrite_location(location, app, app.prefix + "/dir/page", "ha.example")
+            check(f"location outside the app refused: {app.slug} {location}", False, got)
+        except rewrite.RedirectOutsideApp:
+            check(f"location outside the app refused: {app.slug} {location}", True)
+
+    check("log: query left out", rewrite.for_log("http://a/b?token=secret") == "http://a/b?…")
+    check("log: no query, as is", rewrite.for_log("http://a/b") == "http://a/b")
 
     check("ws url: http", rewrite.websocket_url("http://a:1/ws?x") == "ws://a:1/ws?x")
     check("ws url: https", rewrite.websocket_url("https://a/ws") == "wss://a/ws")
@@ -185,11 +216,11 @@ def test_rewrite():
     challenge = [("WWW-Authenticate", 'Basic realm="app"'), ("Content-Type", "text/plain")]
     check(
         "www-authenticate: passed on when Home Assistant doesn't log in",
-        ("WWW-Authenticate", 'Basic realm="app"') in rewrite.response_headers(challenge, MUSIC),
+        ("WWW-Authenticate", 'Basic realm="app"') in rewrite.response_headers(challenge, MUSIC, "/", "h"),
     )
     check(
         "www-authenticate: dropped when Home Assistant logs in, so the browser shows no login box",
-        rewrite.response_headers(challenge, WITH_LOGIN) == [("Content-Type", "text/plain")],
+        rewrite.response_headers(challenge, WITH_LOGIN, "/", "h") == [("Content-Type", "text/plain")],
     )
     for code, expected in (
         (1000, 1000),
@@ -242,44 +273,82 @@ def test_cookies():
     )
     rewritten = cookies.rewrite_for_browser("sid=1; Path=/api/ingress_proxy/music", "/api/ingress_proxy/music", True)
     check("browser: keep_prefix leaves the path", rewritten == "sid=1; Path=/api/ingress_proxy/music", rewritten)
+    for path in ("/", "/config", "/api/ingress_proxy/musicbox", "relative", "", "/api/ingress_proxy/music/../.."):
+        rewritten = cookies.rewrite_for_browser(f"sid=1; Path={path}", "/api/ingress_proxy/music", True)
+        check(
+            f"browser: keep_prefix pins Path={path} to the prefix",
+            rewritten == "sid=1; Path=/api/ingress_proxy/music",
+            rewritten,
+        )
+    for path in ("relative", "", "/../.."):
+        rewritten = cookies.rewrite_for_browser(f"sid=1; Path={path}", "/api/ingress_proxy/music", False)
+        check(
+            f"browser: Path={path} becomes the prefix", rewritten == "sid=1; Path=/api/ingress_proxy/music", rewritten
+        )
+    for name in ("__Host-sid", "__Secure-sid", "__host-sid", "__SECURE-sid"):
+        check(
+            f"browser: {name} dropped",
+            cookies.rewrite_for_browser(f"{name}=1; Path=/; Secure", "/api/ingress_proxy/music", False) is None,
+        )
     check("browser: no Path stays without one", cookies.rewrite_for_browser("a=1", "/p", False) == "a=1")
     check(
         "cookie values: every value of a name, in order",
         cookies.values_named(["a=1; s=new; b=2; s=old", "s=third"], "s") == ["new", "old", "third"],
     )
     check("cookie values: none", cookies.values_named([], "s") == [] and cookies.values_named(["sx=1; x=s"], "s") == [])
-    check(
-        "browser: the proxy's own cookie can't be overwritten",
-        cookies.rewrite_for_browser(f"{SESSION_COOKIE}=evil", "/p", False) is None,
-    )
+    for name in (SESSION_COOKIE, session_cookie_name("other"), "ingress_proxy_session"):
+        check(
+            f"browser: the proxy's own cookie {name} can't be overwritten",
+            cookies.rewrite_for_browser(f"{name}=evil", "/p", False) is None,
+        )
 
     async def jar_checks():
         store = stubs.Store(None, 1, "jar-test")
         jar = cookies.UpstreamCookieJar(store)
         await jar.async_load()
-        check("jar: empty to start", jar.cookies_for("music") == {})
-        jar.update("music", ["sid=1; Path=/", "lang=en", f"{SESSION_COOKIE}=evil", "junk"], now)
-        check("jar: kept", jar.cookies_for("music") == {"sid": "1", "lang": "en"})
+        check("jar: empty to start", jar.cookies_for("music", "ann") == {})
+        jar.update("music", "ann", ["sid=1; Path=/", "lang=en", f"{SESSION_COOKIE}=evil", "junk"], now)
+        check("jar: kept", jar.cookies_for("music", "ann") == {"sid": "1", "lang": "en"})
         check(
             "jar: one save for a login's cookies",
-            store.saves == 1 and store.saved == {"music": {"sid": "1", "lang": "en"}},
+            store.saves == 1 and store.saved == {"music": {"ann": {"sid": "1", "lang": "en"}}},
         )
-        jar.cookies_for("music")["sid"] = "changed"
-        check("jar: callers get a copy", jar.cookies_for("music")["sid"] == "1")
-        jar.update("music", [], now)
-        check("jar: no Set-Cookie, no save", store.saves == 1)
-        jar.update("music", ["sid=; Max-Age=0", "lang=; Max-Age=0"], now)
-        check("jar: deleted cookies forgotten, app removed", jar.cookies_for("music") == {} and store.saved == {})
-        jar.update("music", ["sid=2"], now)
-        jar.update("other", ["t=9"], now)
+        check("jar: another user doesn't get them", jar.cookies_for("music", "bob") == {})
+        jar.update("music", "bob", ["sid=bob"], now)
+        check(
+            "jar: each user has their own",
+            jar.cookies_for("music", "ann")["sid"] == "1" and jar.cookies_for("music", "bob") == {"sid": "bob"},
+        )
+        jar.cookies_for("music", "ann")["sid"] = "changed"
+        check("jar: callers get a copy", jar.cookies_for("music", "ann")["sid"] == "1")
+        saves = store.saves
+        jar.update("music", "ann", [], now)
+        check("jar: no Set-Cookie, no save", store.saves == saves)
+        jar.update("music", "bob", ["sid=; Max-Age=0"], now)
+        check(
+            "jar: one user's logout leaves the other logged in",
+            jar.cookies_for("music", "bob") == {} and jar.cookies_for("music", "ann")["sid"] == "1",
+        )
+        jar.update("music", "ann", ["sid=; Max-Age=0", "lang=; Max-Age=0"], now)
+        check(
+            "jar: deleted cookies forgotten, app removed", jar.cookies_for("music", "ann") == {} and store.saved == {}
+        )
+        jar.update("music", "ann", ["sid=2"], now)
+        jar.update("other", "ann", ["t=9"], now)
+        jar.update("other", "bob", ["t=8"], now)
         jar.forget_app("music")
-        check("jar: forget one app", store.saved == {"other": {"t": "9"}})
+        check("jar: forget one app", store.saved == {"other": {"ann": {"t": "9"}, "bob": {"t": "8"}}})
         saves = store.saves
         jar.forget_app("music")
         check("jar: forgetting an unknown app doesn't save", store.saves == saves)
+        jar.forget_user("bob")
+        check("jar: forget one user", store.saved == {"other": {"ann": {"t": "9"}}})
+        saves = store.saves
+        jar.forget_user("nobody")
+        check("jar: forgetting an unknown user doesn't save", store.saves == saves)
         reloaded = cookies.UpstreamCookieJar(store)
         await reloaded.async_load()
-        check("jar: survives a restart", reloaded.cookies_for("other") == {"t": "9"})
+        check("jar: survives a restart", reloaded.cookies_for("other", "ann") == {"t": "9"})
 
     asyncio.run(jar_checks())
 
@@ -289,22 +358,25 @@ def test_sessions():
     """Tokens open one app, run out, and are cleaned up."""
     clock = {"now": 1000.0}
     store = sessions.SessionStore(clock=lambda: clock["now"])
-    token = store.create("music", is_admin=False)
+    token = store.create("music", "ann")
     check(
-        "session: found for its app",
-        store.find(token, "music") == sessions.Session("music", False, 1000.0 + SESSION_TTL_SECONDS),
+        "session: found for its app, with its user",
+        store.find(token, "music") == sessions.Session("music", "ann", 1000.0 + SESSION_TTL_SECONDS),
     )
     check("session: not for another app", store.find(token, "z2m") is None)
     check("session: missing token", store.find(None, "music") is None and store.find("", "music") is None)
     check("session: unknown token", store.find("made-up", "music") is None)
-    check("session: tokens differ", store.create("music", False) != token)
+    check("session: tokens differ", store.create("music", "ann") != token)
     clock["now"] += SESSION_TTL_SECONDS
     check("session: runs out", store.find(token, "music") is None)
-    store.create("z2m", True)
+    store.create("z2m", "ann")
     check("session: expired ones cleaned up on create", len(store) == 1)
-    second = store.create("music", True)
+    second = store.create("music", "ann")
     store.forget_app("z2m")
     check("session: forget one app", len(store) == 1 and store.find(second, "music") is not None)
+    bobs = store.create("music", "bob")
+    store.forget_user("ann")
+    check("session: forget one user", store.find(second, "music") is None and store.find(bobs, "music") is not None)
 
 
 # ---------------------------------------------------------------- logins.py
@@ -368,6 +440,25 @@ def test_logins():
                 check(f"esphome: not a Device Builder ({name})", False)
             except logins.NotEsphome:
                 check(f"esphome: not a Device Builder ({name})", True)
+
+        # Another request's login that never finishes: waiting for it gives up instead of queueing for ever.
+        client.esphome = FakeEsphome()
+        store.forget("esp")
+        busy = store._locks["esp"]
+        await busy.acquire()
+        wait, logins.LOGIN_WAIT_SECONDS = logins.LOGIN_WAIT_SECONDS, 0.05
+        try:
+            await store.async_authorization(client, ESPHOME)
+            check("esphome: waiting for another login times out", False)
+        except TimeoutError:
+            check("esphome: waiting for another login times out", client.esphome.logins == [])
+        finally:
+            logins.LOGIN_WAIT_SECONDS = wait
+            busy.release()
+        check(
+            "esphome: and the lock still works afterwards",
+            await store.async_authorization(client, ESPHOME) == "Bearer token1",
+        )
 
     asyncio.run(checks())
 
@@ -607,6 +698,11 @@ def test_config_flow():
         config_flow.clean_local_storage({"ma_access_token": "t", "n": 1}) == {"ma_access_token": "t", "n": "1"},
     )
     check("storage: refuses nesting", config_flow.clean_local_storage({"a": {"b": 1}}) is None)
+    check(
+        "storage: Home Assistant's own keys found, the app's kept as typed",
+        config_flow.reserved_local_storage_keys({"hassTokens": "x", "selectedTheme": "y", "ma_access_token": "t"})
+        == ["hassTokens", "selectedTheme"],
+    )
 
     typed = {
         "slug": "music",
@@ -654,6 +750,11 @@ def test_config_flow():
             isinstance(stubs.RECORDED["clients"][0]["cookie_jar"], aiohttp.DummyCookieJar)
             and stubs.RECORDED["clients"][0]["auto_decompress"] is False,
         )
+        timeout = stubs.RECORDED["clients"][0]["timeout"]
+        check(
+            "client: no total timeout, but a reply that goes quiet is given up on",
+            timeout.total is None and timeout.sock_read == READ_IDLE_TIMEOUT_SECONDS,
+        )
 
         made = len(stubs.RECORDED["clients"])
         async_get_client(hass, True)
@@ -680,6 +781,29 @@ def test_config_flow():
         result = await flow.async_step_user({**typed, "advanced": {"headers": {"X": "a\nb"}}})
         check("form: bad headers", result["errors"] == {"base": "invalid_headers"}, result["errors"])
         check("form: nothing sent to the app while the form has errors", len(client.requests) == requests_before)
+        result = await flow.async_step_user({**typed, "advanced": {"local_storage": {"hassTokens": "{}"}}})
+        check(
+            "form: Home Assistant's login key refused", result["errors"] == {"base": "reserved_local_storage"}, result
+        )
+
+        # Cloud metadata services are refused, by address or by a name that leads to one; private addresses aren't.
+        hass.loop.addresses["metadata.example"] = ["10.0.0.9", "169.254.169.254"]
+        hass.loop.addresses["metadata6.example"] = ["fd00:ec2::254"]
+        for url in (
+            "http://169.254.169.254",
+            "http://169.254.169.254:80/latest",
+            "http://[fd00:ec2::254]",
+            "http://[::ffff:169.254.169.254]",
+            "http://metadata.example",
+            "http://metadata6.example",
+        ):
+            result = await config_flow.IngressProxyConfigFlow(hass).async_step_user({**typed, "url": url})
+            check(f"form: metadata service refused: {url}", result["errors"] == {"url": "metadata_address"}, result)
+        check("form: and never contacted", len(client.requests) == requests_before)
+        for url in ("http://127.0.0.1:8123", "http://192.168.1.20:8095", "http://[::1]:8080", "http://169.254.1.1"):
+            client.replies.append(FakeUpstream())
+            result = await config_flow.IngressProxyConfigFlow(hass).async_step_user({**typed, "url": url})
+            check(f"form: local address allowed: {url}", result["type"] == "create_entry", result)
 
         client.replies.append(aiohttp.ClientError("refused"))
         result = await config_flow.IngressProxyConfigFlow(hass).async_step_user(typed)
@@ -837,15 +961,17 @@ def test_lifecycle_and_command():
     async def checks():
         client = FakeClient()
         hass = new_hass(client)
-        # A cookie file from an earlier version is read as is.
-        old = stubs.Store(hass, 1, "ingress_proxy.cookies")
-        old.saved = {"music": {"sid": "kept"}}
+        # Saved cookies: the per-user file is read; the shared file of versions before 1.5.0 is deleted unread.
+        saved = {
+            "ingress_proxy.user_cookies": {"music": {"admin": {"sid": "kept"}}},
+            "ingress_proxy.cookies": {"music": {"sid": "shared"}},
+        }
         original_store = stubs.Store
 
         class PreloadedStore(original_store):
             def __init__(self, hass, version, key):
                 super().__init__(hass, version, key)
-                self.saved = old.saved
+                self.saved = saved.get(key)
 
         ingress_proxy.Store = PreloadedStore
         try:
@@ -853,7 +979,9 @@ def test_lifecycle_and_command():
         finally:
             ingress_proxy.Store = original_store
         data = hass.data["ingress_proxy"]
-        check("setup: earlier cookie file read", data.cookie_jar.cookies_for("music") == {"sid": "kept"})
+        check("setup: saved cookies read", data.cookie_jar.cookies_for("music", "admin") == {"sid": "kept"})
+        shared = stubs.RECORDED["stores"]["ingress_proxy.cookies"]
+        check("setup: the shared cookies of earlier versions deleted", shared.removed and shared.saved is None)
         check(
             "setup: one view",
             len(stubs.RECORDED["views"]) == 1 and isinstance(stubs.RECORDED["views"][0], proxy.IngressProxyView),
@@ -905,7 +1033,8 @@ def test_lifecycle_and_command():
             and answer["local_storage"] == {"ma_access_token": "secret"},
             answer,
         )
-        check("command: token works for the app", data.sessions.find(answer["session"], "music").is_admin)
+        check("command: each app has its own cookie name", answer["cookie"] == "ingress_proxy_session_music")
+        check("command: token works for the app", data.sessions.find(answer["session"], "music").user_id == "admin")
 
         await ingress_proxy.async_unload_entry(hass, entry)
         check(
@@ -923,11 +1052,39 @@ def test_lifecycle_and_command():
             stubs.RECORDED["panels"]["proxy-music"]["sidebar_title"] == "Tunes",
         )
         answer = ask("music", False).results[0]
-        check("command: open app lets a user in", data.sessions.find(answer["session"], "music").is_admin is False)
+        check("command: open app lets a user in", data.sessions.find(answer["session"], "music").user_id == "user")
+
+        # A Home Assistant user is deleted: their sessions end and their kept app logins go.
+        data.cookie_jar.update("music", "user", ["sid=users"])
+        hass.bus.async_fire("user_removed", {"user_id": "user"})
+        check(
+            "user removed: sessions end, kept logins deleted",
+            data.sessions.find(answer["session"], "music") is None
+            and data.cookie_jar.cookies_for("music", "user") == {}
+            and data.cookie_jar.cookies_for("music", "admin") == {"sid": "kept"},
+        )
+
+        # An entry saved before the form refused Home Assistant's own storage keys doesn't hand them out.
+        await ingress_proxy.async_unload_entry(hass, entry)
+        entry = stubs.ConfigEntry(
+            entry_data(require_admin=False, local_storage={"hassTokens": "{}", "ma_access_token": "t"})
+        )
+        await ingress_proxy.async_setup_entry(hass, entry)
+        answer = ask("music", True).results[0]
+        check("command: Home Assistant's storage keys never sent", answer["local_storage"] == {"ma_access_token": "t"})
 
         await ingress_proxy.async_unload_entry(hass, entry)
         await ingress_proxy.async_remove_entry(hass, entry)
-        check("remove: its kept cookies deleted", data.cookie_jar.cookies_for("music") == {})
+        check("remove: its kept cookies deleted", data.cookie_jar.cookies_for("music", "admin") == {})
+
+        # An app whose name now leads to a cloud metadata service isn't set up.
+        hass.loop.addresses["music"] = ["169.254.169.254"]
+        try:
+            await ingress_proxy.async_setup_entry(hass, stubs.ConfigEntry(entry_data()))
+            check("entry: metadata service refused at set-up", False)
+        except stubs.ConfigEntryError:
+            check("entry: metadata service refused at set-up", "proxy-music" not in stubs.RECORDED["panels"])
+        del hass.loop.addresses["music"]
 
         # Removing an app while the integration isn't running still deletes its cookies.
         hass2 = new_hass(client)
@@ -936,15 +1093,15 @@ def test_lifecycle_and_command():
         class SavedStore(original_store):
             def __init__(self, hass, version, key):
                 super().__init__(hass, version, key)
-                self.saved = {"music": {"sid": "x"}, "other": {"t": "1"}}
+                self.saved = {"music": {"ann": {"sid": "x"}}, "other": {"ann": {"t": "1"}}}
 
         ingress_proxy.Store = SavedStore
         try:
             await ingress_proxy.async_remove_entry(hass2, stubs.ConfigEntry(entry_data()))
         finally:
             ingress_proxy.Store = original_store
-        saved = stubs.RECORDED["stores"]["ingress_proxy.cookies"].saved
-        check("remove while stopped: only that app's cookies deleted", saved == {"other": {"t": "1"}}, saved)
+        saved = stubs.RECORDED["stores"]["ingress_proxy.user_cookies"].saved
+        check("remove while stopped: only that app's cookies deleted", saved == {"other": {"ann": {"t": "1"}}}, saved)
 
     asyncio.run(checks())
 
@@ -967,10 +1124,13 @@ def test_view():
             ),
         )
         view = stubs.RECORDED["views"][0]
-        admin = data.sessions.create("music", is_admin=True)
-        user = data.sessions.create("music", is_admin=False)  # made while the app was open to users, say
-        z2m = data.sessions.create("z2m", is_admin=False)
-        data.cookie_jar.update("music", ["sid=kept"])
+        hass.auth.add_user("admin", admin=True)
+        hass.auth.add_user("user")
+        admin = data.sessions.create("music", "admin")
+        user = data.sessions.create("music", "user")  # made while the app was open to users, say
+        z2m = data.sessions.create("z2m", "user")
+        z2m_cookie = session_cookie_name("z2m")
+        data.cookie_jar.update("music", "admin", ["sid=kept"])
 
         response = await view.get(FakeRequest("/api/ingress_proxy/nope/"), "nope", "")
         check("view: unknown app 404", response.status == 404)
@@ -1043,11 +1203,11 @@ def test_view():
             "view: persist login keeps Set-Cookie away from the browser",
             not any(n == "Set-Cookie" for n, _ in response.headers),
         )
-        check("view: and remembers it", data.cookie_jar.cookies_for("music") == {"sid": "new"})
+        check("view: and remembers it, for that user", data.cookie_jar.cookies_for("music", "admin") == {"sid": "new"})
 
         client.replies.append(FakeUpstream(headers=[("Set-Cookie", "z=1; Domain=z2m; Path=/")]))
         response = await view.post(
-            FakeRequest("/api/ingress_proxy/z2m/login", method="POST", cookies={SESSION_COOKIE: z2m}), "z2m", "login"
+            FakeRequest("/api/ingress_proxy/z2m/login", method="POST", cookies={z2m_cookie: z2m}), "z2m", "login"
         )
         check("view: POST streams the body", client.requests[-1]["data"] == "request body stream")
         check(
@@ -1055,7 +1215,7 @@ def test_view():
             ("Set-Cookie", "z=1; Path=/api/ingress_proxy/z2m") in response.headers,
             response.headers,
         )
-        check("view: and Home Assistant keeps none", data.cookie_jar.cookies_for("z2m") == {})
+        check("view: and Home Assistant keeps none", data.cookie_jar.cookies_for("z2m", "user") == {})
 
         client.replies.append(aiohttp.ClientError("refused"))
         response = await view.get(FakeRequest("/api/ingress_proxy/music/", cookies=signed_in), "music", "")
@@ -1084,7 +1244,7 @@ def test_view():
             entry_data(slug="esp", url="http://esphome:6052", username="admin", password="hunter2"), entry_id="3"
         )
         await ingress_proxy.async_setup_entry(hass, basic)
-        esp = {SESSION_COOKIE: data.sessions.create("esp", is_admin=True)}
+        esp = {session_cookie_name("esp"): data.sessions.create("esp", "admin")}
         browser_login = [("Authorization", "Basic YnJvd3Nlcjp4")]
         client.replies.append(FakeUpstream(status=401, headers=[("WWW-Authenticate", 'Basic realm="ESPHome"')]))
         response = await view.get(FakeRequest("/api/ingress_proxy/esp/", cookies=esp, headers=browser_login), "esp")
@@ -1104,7 +1264,7 @@ def test_view():
         )
         await ingress_proxy.async_unload_entry(hass, basic)  # what Reconfigure does: reload with the new settings
         await ingress_proxy.async_setup_entry(hass, builder)
-        esp = {SESSION_COOKIE: data.sessions.create("esp", is_admin=True)}
+        esp = {session_cookie_name("esp"): data.sessions.create("esp", "admin")}
         for _ in range(2):
             client.replies.append(FakeUpstream())
             await view.get(FakeRequest("/api/ingress_proxy/esp/devices", cookies=esp), "esp")
@@ -1127,6 +1287,97 @@ def test_view():
             response.status == 502 and "log in" in response.text and len(client.requests) == requests_before,
         )
         check("view: and the password isn't in it", "hunter2" not in response.text and "changed" not in response.text)
+
+        # ---- the user behind a session is checked on every request
+        signed_in = {SESSION_COOKIE: admin}
+        for change, undo, name in (
+            (
+                lambda u: setattr(u, "is_active", False),
+                lambda u: setattr(u, "is_active", True),
+                "deactivated",
+            ),
+            (lambda u: setattr(u, "admin", False), lambda u: setattr(u, "admin", True), "no longer an administrator"),
+        ):
+            change(hass.auth.users["admin"])
+            response = await view.get(FakeRequest("/api/ingress_proxy/music/", cookies=signed_in), "music", "")
+            check(f"view: user {name}: 401 on the admins-only app, at once", response.status == 401)
+            undo(hass.auth.users["admin"])
+        removed = hass.auth.users.pop("user")
+        response = await view.get(FakeRequest("/api/ingress_proxy/z2m/", cookies={z2m_cookie: z2m}), "z2m", "")
+        check("view: user deleted: 401", response.status == 401)
+        hass.auth.users["user"] = removed
+        removed.admin = False
+        client.replies.append(FakeUpstream())
+        response = await view.get(FakeRequest("/api/ingress_proxy/z2m/", cookies={z2m_cookie: z2m}), "z2m", "")
+        check("view: a user on an app open to users still gets in", response.status == 200)
+
+        # ---- remembered logins are per user, and no panel session cookie ever reaches an app
+        await ingress_proxy.async_setup_entry(
+            hass, stubs.ConfigEntry(entry_data(slug="shared", require_admin=False), entry_id="4")
+        )
+        data.cookie_jar.update("shared", "admin", ["sid=admins-login"])
+        users_session = data.sessions.create("shared", "user")
+        header = (
+            f"{session_cookie_name('shared')}={users_session}; {SESSION_COOKIE}={admin}; "
+            "ingress_proxy_session=old; theme=dark"
+        )
+        client.replies.append(FakeUpstream(headers=[("Set-Cookie", "sid=users-login")]))
+        await view.get(FakeRequest("/api/ingress_proxy/shared/", cookie_header=header), "shared", "")
+        sent = dict(client.requests[-1]["headers"]).get("Cookie")
+        check("view: another user's remembered login never sent", sent == "theme=dark", sent)
+        check(
+            "view: each user's login remembered apart",
+            data.cookie_jar.cookies_for("shared", "user") == {"sid": "users-login"}
+            and data.cookie_jar.cookies_for("shared", "admin") == {"sid": "admins-login"},
+        )
+
+        # ---- redirects stay inside the app
+        client.replies.append(FakeUpstream(status=302, headers=[("Location", "https://evil.example/")]))
+        response = await view.get(FakeRequest("/api/ingress_proxy/music/go", cookies=signed_in), "music", "go")
+        check(
+            "view: redirect to another site refused with a 502", response.status == 502 and "outside" in response.text
+        )
+        client.replies.append(FakeUpstream(status=302, headers=[("Location", "next")]))
+        response = await view.get(FakeRequest("/api/ingress_proxy/music/a/go", cookies=signed_in), "music", "a/go")
+        check(
+            "view: relative redirect resolved inside the app",
+            ("Location", "/api/ingress_proxy/music/a/next") in response.headers,
+            response.headers,
+        )
+
+        # ---- how many requests and websockets an app can have open
+        check("limits: nothing left counted open", not view._open_requests and not view._open_websockets)
+        view._open_requests["music"] = proxy.MAX_REQUESTS_PER_APP
+        response = await view.get(FakeRequest("/api/ingress_proxy/music/", cookies=signed_in), "music", "")
+        check("limits: too many requests: 503", response.status == 503 and response.headers["Retry-After"] == "5")
+        view._open_requests.clear()
+        view._open_websockets["music"] = proxy.MAX_WEBSOCKETS_PER_APP
+        response = await view.get(
+            FakeRequest("/api/ingress_proxy/music/ws", cookies=signed_in, headers=[("Upgrade", "websocket")]), "music"
+        )
+        check("limits: too many websockets: 503", response.status == 503)
+        view._open_websockets.clear()
+        client.replies.append(FakeUpstream())
+        response = await view.get(FakeRequest("/api/ingress_proxy/music/", cookies=signed_in), "music", "")
+        check("limits: an app with room gets in", response.status == 200 and not view._open_requests)
+
+        # ---- debug logs leave the query string out
+        records = []
+        handler = logging.Handler()
+        handler.emit = records.append
+        proxy._LOGGER.addHandler(handler)
+        proxy._LOGGER.setLevel(logging.DEBUG)
+        try:
+            client.replies.append(FakeUpstream())
+            await view.get(FakeRequest("/api/ingress_proxy/music/a", query="token=s3cret", cookies=signed_in), "music")
+            client.replies.append(aiohttp.ClientError("refused"))
+            await view.get(FakeRequest("/api/ingress_proxy/music/a", query="token=s3cret", cookies=signed_in), "music")
+        finally:
+            proxy._LOGGER.removeHandler(handler)
+            proxy._LOGGER.setLevel(logging.NOTSET)
+        messages = [record.getMessage() for record in records]
+        check("log: requests logged", len(messages) == 2, messages)
+        check("log: no query string in them", not any("s3cret" in message for message in messages), messages)
 
     asyncio.run(checks())
 

@@ -189,9 +189,10 @@ class IngressProxyPanel extends HTMLElement {
       }
       this._storageWritten = true;
     }
-    // An earlier Ingress Proxy kept the session in one cookie for every app, at /api/ingress_proxy. A browser that
-    // still has it sends it alongside this app's own; delete it so it can't get in the way.
-    document.cookie = `${answer.cookie}=; Path=/api/ingress_proxy; Max-Age=0`;
+    // Before 1.5.0 every app's session cookie had the same name, ingress_proxy_session (and earlier still it was
+    // kept at /api/ingress_proxy). Now each app has its own name; delete the old ones so they don't linger.
+    document.cookie = "ingress_proxy_session=; Path=/api/ingress_proxy; Max-Age=0";
+    document.cookie = `ingress_proxy_session=; Path=${answer.path}; Max-Age=0`;
     const secure = location.protocol === "https:" ? "; Secure" : "";
     document.cookie =
       `${answer.cookie}=${answer.session}; Path=${answer.path}; Max-Age=${answer.max_age}; SameSite=Strict${secure}`;

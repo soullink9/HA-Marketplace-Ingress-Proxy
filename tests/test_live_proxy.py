@@ -22,7 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import stubs  # noqa: E402,I001
 
 import ingress_proxy  # noqa: E402
-from ingress_proxy.const import SESSION_COOKIE  # noqa: E402
+from ingress_proxy import proxy  # noqa: E402
+from ingress_proxy.const import session_cookie_name  # noqa: E402
 
 FAILURES = []
 BIG_BODY = bytes(range(256)) * 4096  # 1 MiB
@@ -52,6 +53,11 @@ def make_app(seen):
         response.headers.add("Set-Cookie", "sid=abc; Path=/; Priority=High; HttpOnly")
         response.headers.add("Set-Cookie", "lang=en; Path=/")
         return response
+
+    @routes.get("/away")
+    async def away(request):
+        # An open redirect: the app sends the browser wherever ?to= says.
+        return web.Response(status=302, headers={"Location": request.query.get("to", "https://elsewhere.example/")})
 
     @routes.get("/logout")
     async def logout(request):
@@ -265,6 +271,8 @@ async def main():
 
     hass = stubs.HomeAssistant()
     hass.data["test_client_factory"] = client_factory
+    hass.auth.add_user("admin", admin=True)
+    hass.auth.add_user("user")
     await ingress_proxy.async_setup(hass, {})
     await ingress_proxy.async_setup_entry(hass, entry("app", app_url))
     await ingress_proxy.async_setup_entry(hass, entry("open", app_url, persist_login=False, require_admin=False))
@@ -288,8 +296,9 @@ async def main():
 
     try:
         # What the panel does: get a session and store it as a cookie for the app's path.
-        session = data.sessions.create("app", is_admin=True)
-        browser.cookie_jar.update_cookies({SESSION_COOKIE: session}, response_url=aiohttp.client.URL(f"{base}/app/"))
+        session = data.sessions.create("app", "admin")
+        app_cookie = session_cookie_name("app")
+        browser.cookie_jar.update_cookies({app_cookie: session}, response_url=aiohttp.client.URL(f"{base}/app/"))
         browser.cookie_jar.update_cookies({"browser_pref": "1"}, response_url=aiohttp.client.URL(f"{base}/app/"))
 
         async with browser.get(f"{base}/app", allow_redirects=False) as response:
@@ -299,8 +308,8 @@ async def main():
             )
         async with browser.get(f"{base}/app/") as response:
             check("front page", response.status == 200 and await response.text() == "home")
-        # An older version's session cookie, kept at /api/ingress_proxy, is sent along with this app's own.
-        stale = f"{SESSION_COOKIE}={session}; {SESSION_COOKIE}=left-over"
+        # A stale value of the session cookie is sent along with the valid one.
+        stale = f"{app_cookie}={session}; {app_cookie}=left-over; ingress_proxy_session=from-an-older-version"
         plain = aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar())  # sends exactly the Cookie header given
         try:
             async with plain.get(f"{base}/app/", headers={"Cookie": stale}) as response:
@@ -319,8 +328,8 @@ async def main():
             check("login cookies kept away from the browser", "Set-Cookie" not in response.headers)
         check(
             "login cookies kept in Home Assistant, Priority not taken for a cookie",
-            data.cookie_jar.cookies_for("app") == {"sid": "abc", "lang": "en"},
-            data.cookie_jar.cookies_for("app"),
+            data.cookie_jar.cookies_for("app", "admin") == {"sid": "abc", "lang": "en"},
+            data.cookie_jar.cookies_for("app", "admin"),
         )
 
         async with browser.get(f"{base}/app/whoami") as response:
@@ -429,6 +438,34 @@ async def main():
                 (message.type, ws.close_code),
             )
 
+        # A message bigger than the limit closes the websocket (1009: too big) instead of being relayed.
+        limit, proxy.WEBSOCKET_MAX_MESSAGE_BYTES = proxy.WEBSOCKET_MAX_MESSAGE_BYTES, 1024
+        try:
+            async with browser.ws_connect(f"{base}/app/ws") as ws:
+                await ws.receive(timeout=2)
+                await ws.send_str("small")
+                check(
+                    "websocket: a message within the limit is relayed",
+                    (await ws.receive(timeout=2)).data == "echo: small",
+                )
+                await ws.send_str("x" * 2048)
+                message = await ws.receive(timeout=2)
+                check(
+                    "websocket: a message over the limit closes it, unrelayed",
+                    message.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED) and ws.close_code == 1009,
+                    (message, ws.close_code),
+                )
+        finally:
+            proxy.WEBSOCKET_MAX_MESSAGE_BYTES = limit
+        await asyncio.sleep(0.1)  # the proxy finishes its side of the close
+        check("websocket: nothing left counted open", not stubs.RECORDED["views"][0]._open_websockets)
+
+        # The user behind the session is checked on every request: an administrator who is demoted is shut out.
+        hass.auth.users["admin"].admin = False
+        async with browser.get(f"{base}/app/") as response:
+            check("demoted administrator: 401 at once", response.status == 401, response.status)
+        hass.auth.users["admin"].admin = True
+
         async with browser.ws_connect(f"{base}/app/api") as ws:
             message = await ws.receive(timeout=2)
             check(
@@ -442,14 +479,23 @@ async def main():
             await response.read()
         check(
             "logout deletes the kept cookie",
-            data.cookie_jar.cookies_for("app") == {"lang": "en"},
-            data.cookie_jar.cookies_for("app"),
+            data.cookie_jar.cookies_for("app", "admin") == {"lang": "en"},
+            data.cookie_jar.cookies_for("app", "admin"),
         )
 
+        async with browser.get(f"{base}/app/away", allow_redirects=False) as response:
+            check("redirect to another site refused", response.status == 502, response.status)
+        async with browser.get(f"{base}/app/away?to=/config", allow_redirects=False) as response:
+            check(
+                "redirect from the app's root kept inside the app",
+                response.status == 302 and response.headers["Location"] == "/api/ingress_proxy/app/config",
+                response.headers.get("Location"),
+            )
+
         # An app with persist login off: the browser keeps its cookies, under the app's path.
-        open_session = data.sessions.create("open", is_admin=False)
+        open_session = data.sessions.create("open", "user")
         browser.cookie_jar.update_cookies(
-            {SESSION_COOKIE: open_session}, response_url=aiohttp.client.URL(f"{base}/open/")
+            {session_cookie_name("open"): open_session}, response_url=aiohttp.client.URL(f"{base}/open/")
         )
         async with browser.get(f"{base}/open/login", allow_redirects=False) as response:
             cookies = response.headers.getall("Set-Cookie", [])
@@ -461,11 +507,11 @@ async def main():
         async with browser.get(f"{base}/open/whoami") as response:
             body = await response.json()
             check("persist login off: the browser sends them back", body["cookies"].get("sid") == "abc", body)
-        check("persist login off: Home Assistant keeps none", data.cookie_jar.cookies_for("open") == {})
+        check("persist login off: Home Assistant keeps none", data.cookie_jar.cookies_for("open", "user") == {})
 
-        down_session = data.sessions.create("down", is_admin=True)
+        down_session = data.sessions.create("down", "admin")
         browser.cookie_jar.update_cookies(
-            {SESSION_COOKIE: down_session}, response_url=aiohttp.client.URL(f"{base}/down/")
+            {session_cookie_name("down"): down_session}, response_url=aiohttp.client.URL(f"{base}/down/")
         )
         async with browser.get(f"{base}/down/") as response:
             check("app down: 502", response.status == 502)
@@ -478,7 +524,7 @@ async def main():
         # Apps Home Assistant logs in to itself.
         for slug in ("basic", "esp"):
             browser.cookie_jar.update_cookies(
-                {SESSION_COOKIE: data.sessions.create(slug, is_admin=True)},
+                {session_cookie_name(slug): data.sessions.create(slug, "admin")},
                 response_url=aiohttp.client.URL(f"{base}/{slug}/"),
             )
         async with browser.get(f"{base}/basic/basic", headers={"Authorization": "Basic d3Jvbmc6d3Jvbmc="}) as response:

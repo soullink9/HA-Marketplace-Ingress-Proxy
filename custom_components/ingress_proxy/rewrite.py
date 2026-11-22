@@ -5,7 +5,7 @@ Kept apart from the proxy view and free of aiohttp, so every rule can be read in
 
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 
 if TYPE_CHECKING:
     # Only for type hints: models.py imports logins.py, which uses this module.
@@ -65,6 +65,16 @@ RESPONSE_HEADERS_TO_DROP = HOP_BY_HOP | {
 # and must never be sent.
 _SENDABLE_CLOSE_CODES = (range(1000, 1004), range(1007, 1015), range(3000, 5000))
 NORMAL_CLOSE = 1000
+
+
+class RedirectOutsideApp(ValueError):
+    """The app's reply redirects the browser somewhere outside the app's own path on Home Assistant's address."""
+
+
+def for_log(url: str) -> str:
+    """A URL fit for the debug log: the query string is left out, since apps sometimes put tokens in it."""
+    base, question, _ = url.partition("?")
+    return base + "?…" if question else base
 
 
 def has_parent_segment(raw_path: str) -> bool:
@@ -137,10 +147,14 @@ def with_authorization(headers: list[tuple[str, str]], authorization: str | None
     return kept
 
 
-def response_headers(incoming: Iterable[tuple[str, str]], app: ProxiedApp) -> list[tuple[str, str]]:
+def response_headers(
+    incoming: Iterable[tuple[str, str]], app: ProxiedApp, request_path: str, public_host: str
+) -> list[tuple[str, str]]:
     """The app's response headers to pass to the browser, with Location and Content-Security-Policy adjusted.
 
-    WWW-Authenticate is dropped too when Home Assistant logs in to the app itself.
+    WWW-Authenticate is dropped too when Home Assistant logs in to the app itself. `request_path` and `public_host`
+    are the browser's request path (still percent-encoded) and Home Assistant's address as the browser used it, for
+    rewrite_location. Raises RedirectOutsideApp for a redirect that leads out of the app.
     """
     headers = []
     for name, value in incoming:
@@ -152,7 +166,7 @@ def response_headers(incoming: Iterable[tuple[str, str]], app: ProxiedApp) -> li
             # login box whose answer the proxy replaces anyway.
             continue
         if lower == "location":
-            value = rewrite_location(value, app)
+            value = rewrite_location(value, app, request_path, public_host)
         elif lower == "content-security-policy":
             value = strip_frame_ancestors(value)
             if not value:
@@ -161,21 +175,46 @@ def response_headers(incoming: Iterable[tuple[str, str]], app: ProxiedApp) -> li
     return headers
 
 
-def rewrite_location(location: str, app: ProxiedApp) -> str:
-    """Point a redirect that leads back into the app at the app's path on Home Assistant's address.
+def rewrite_location(location: str, app: ProxiedApp, request_path: str, public_host: str) -> str:
+    """Point a redirect at the app's path on Home Assistant's address, or refuse it if it leads anywhere else.
 
-    A redirect anywhere else (another site, a relative path like "next") is left alone.
+    The app runs on Home Assistant's address, so a redirect it sends could otherwise take the browser to any page of
+    Home Assistant, or to another site (an "open redirect"). Allowed, and returned as a path:
+      - a full URL to the app's internal address, or to Home Assistant's address under the app's prefix
+      - a path from the app's root ("/login"), which is moved under the prefix
+      - a relative path ("next", "../list", "?page=2"), resolved against the page that was asked for
+    Anything that ends up outside the prefix raises RedirectOutsideApp: another site, a protocol-relative "//host"
+    (or "/\\host", which browsers read the same way), or a path that climbs out with "..".
     """
+    # Browsers ignore surrounding spaces and read a backslash as a slash, so check what they would follow.
+    location = location.strip().replace("\\", "/")
+    parts = urlsplit(location)
     if location.startswith(app.url + "/") or location == app.url:
         # A full URL to the app's internal address, which the browser can't reach: keep only the path.
-        location = location[len(app.url) :] or "/"
-    elif location.startswith("/") and not location.startswith("//"):
-        # A path from the app's root. If the app's URL has a path of its own, the app may include it.
-        app_path = urlsplit(app.url).path
-        if app_path and (location == app_path or location.startswith(app_path + "/")):
-            location = location[len(app_path) :] or "/"
+        location = from_app_root(location[len(app.url) :] or "/", app)
+    elif parts.scheme or parts.netloc:
+        if parts.scheme not in ("http", "https", "") or parts.netloc.lower() != public_host.lower():
+            raise RedirectOutsideApp(f"to {parts.scheme or 'another'} address {parts.netloc!r}")
+        # A full URL to Home Assistant's own address, built from X-Forwarded-Host: it must already be in the app.
+        location = location[len(f"{parts.scheme}://{parts.netloc}") if parts.scheme else len(f"//{parts.netloc}") :]
+        location = location or "/"
+    elif location.startswith("/"):
+        location = from_app_root(location, app)
     else:
-        return location
+        # Relative to the page that was asked for, as the browser would resolve it.
+        location = urljoin(request_path, location)
+    path = urlsplit(location).path
+    if has_parent_segment(path) or not (path == app.prefix or path.startswith(app.prefix + "/")):
+        raise RedirectOutsideApp(f"to {for_log(location)!r}")
+    return location
+
+
+def from_app_root(location: str, app: ProxiedApp) -> str:
+    """A redirect path the app wrote from its own root, as a path on Home Assistant's address."""
+    # If the app's URL has a path of its own, the app may include it.
+    app_path = urlsplit(app.url).path
+    if app_path and (location == app_path or location.startswith(app_path + "/")):
+        location = location[len(app_path) :] or "/"
     already_prefixed = location == app.prefix or location.startswith(app.prefix + "/")
     if app.keep_prefix or already_prefixed:
         # The app builds its URLs with the prefix itself (keep prefix on, or it reads X-Ingress-Path).

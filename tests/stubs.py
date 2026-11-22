@@ -79,9 +79,10 @@ if not REAL_AIOHTTP:
         pass
 
     class ClientTimeout:
-        def __init__(self, total=None, sock_connect=None):
+        def __init__(self, total=None, sock_connect=None, sock_read=None):
             self.total = total
             self.sock_connect = sock_connect
+            self.sock_read = sock_read
 
     class DummyCookieJar:
         pass
@@ -128,7 +129,7 @@ if not REAL_AIOHTTP:
             self.eof = True
 
     class WebSocketResponse:
-        def __init__(self, protocols=(), max_msg_size=0):
+        def __init__(self, protocols=(), max_msg_size=4 * 1024 * 1024, heartbeat=None):
             self.protocols = protocols
 
     web = _module(
@@ -155,11 +156,82 @@ if not REAL_AIOHTTP:
 
 # ---------- Home Assistant ----------
 class HomeAssistant:
-    """Only what the integration touches: hass.data and hass.http."""
+    """Only what the integration touches: hass.data, hass.http, hass.auth, hass.bus, and hass.loop's address lookup."""
 
     def __init__(self):
         self.data = {}
         self.http = _Http()
+        self.auth = _Auth()
+        self.bus = _Bus()
+        self.loop = _Loop()
+
+
+class User:
+    """A Home Assistant user. As in Home Assistant, a deactivated user is no administrator."""
+
+    def __init__(self, user_id, admin=False, is_active=True):
+        self.id = user_id
+        self.admin = admin
+        self.is_active = is_active
+
+    @property
+    def is_admin(self):
+        return self.is_active and self.admin
+
+
+class _Auth:
+    """The users Home Assistant knows, by id. Tests add them with add_user."""
+
+    def __init__(self):
+        self.users = {}
+
+    def add_user(self, user_id, admin=False):
+        self.users[user_id] = User(user_id, admin)
+        return self.users[user_id]
+
+    async def async_get_user(self, user_id):
+        return self.users.get(user_id)
+
+
+class Event:
+    def __init__(self, event_type, data):
+        self.event_type = event_type
+        self.data = data
+
+
+class _Bus:
+    """Collects listeners; async_fire calls them at once."""
+
+    def __init__(self):
+        self.listeners = {}
+
+    def async_listen(self, event_type, listener):
+        self.listeners.setdefault(event_type, []).append(listener)
+        return lambda: self.listeners[event_type].remove(listener)
+
+    def async_fire(self, event_type, data):
+        for listener in self.listeners.get(event_type, []):
+            listener(Event(event_type, data))
+
+
+class _Loop:
+    """Address lookups answered from `addresses` (name -> list of IPs); IP addresses answer themselves."""
+
+    def __init__(self):
+        self.addresses = {}
+
+    async def getaddrinfo(self, host, port, proto=0):
+        import ipaddress
+        import socket
+
+        try:
+            ipaddress.ip_address(host)
+            found = [host]
+        except ValueError:
+            found = self.addresses.get(host)
+        if found is None:
+            raise socket.gaierror(f"no address for {host}")
+        return [(socket.AF_INET, socket.SOCK_STREAM, proto, "", (address, 0)) for address in found]
 
 
 class _Http:
@@ -185,9 +257,15 @@ def callback(func):
     return func
 
 
+class ConfigEntryError(Exception):
+    pass
+
+
 _module("homeassistant")
 _module("homeassistant.const", CONF_URL="url", CONF_USERNAME="username", CONF_PASSWORD="password")
-_module("homeassistant.core", HomeAssistant=HomeAssistant, callback=callback)
+_module("homeassistant.core", HomeAssistant=HomeAssistant, Event=Event, callback=callback)
+_module("homeassistant.auth", EVENT_USER_REMOVED="user_removed")
+_module("homeassistant.exceptions", ConfigEntryError=ConfigEntryError)
 _module("homeassistant.components")
 _module("homeassistant.components.http", HomeAssistantView=HomeAssistantView, StaticPathConfig=StaticPathConfig)
 
@@ -224,8 +302,8 @@ def async_register_command(hass, handler):
 class ActiveConnection:
     """Collects the answers a websocket command sends."""
 
-    def __init__(self, is_admin):
-        self.user = types.SimpleNamespace(is_admin=is_admin)
+    def __init__(self, is_admin, user_id=None):
+        self.user = User(user_id or ("admin" if is_admin else "user"), admin=is_admin)
         self.results = []
         self.errors = []
 
@@ -382,7 +460,12 @@ class Store:
         self.key = key
         self.saved = None
         self.saves = 0
+        self.removed = False
         RECORDED["stores"][key] = self
+
+    async def async_remove(self):
+        self.saved = None
+        self.removed = True
 
     async def async_load(self):
         return self.saved

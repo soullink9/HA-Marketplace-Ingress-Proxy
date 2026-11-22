@@ -6,7 +6,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 import probatio
 
-from .const import DOMAIN, SESSION_COOKIE, SESSION_TTL_SECONDS
+from .const import DOMAIN, RESERVED_LOCAL_STORAGE_KEYS, SESSION_TTL_SECONDS, session_cookie_name
 from .models import DATA_KEY
 
 
@@ -29,17 +29,20 @@ def ws_session(hass: HomeAssistant, connection: websocket_api.ActiveConnection, 
     if app is None:
         connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "There is no app with this slug")
         return
-    is_admin = connection.user.is_admin
-    if app.require_admin and not is_admin:
+    user = connection.user
+    if app.require_admin and not user.is_admin:
         connection.send_error(msg["id"], websocket_api.ERR_UNAUTHORIZED, "Only administrators can open this app")
         return
     connection.send_result(
         msg["id"],
         {
-            "session": data.sessions.create(app.slug, is_admin),
-            "cookie": SESSION_COOKIE,
+            "session": data.sessions.create(app.slug, user.id),
+            "cookie": session_cookie_name(app.slug),
             "path": app.prefix,
             "max_age": SESSION_TTL_SECONDS,
-            "local_storage": dict(app.local_storage),
+            # The setup form refuses Home Assistant's own keys; an entry saved before it did is filtered here.
+            "local_storage": {
+                key: value for key, value in app.local_storage.items() if key not in RESERVED_LOCAL_STORAGE_KEYS
+            },
         },
     )

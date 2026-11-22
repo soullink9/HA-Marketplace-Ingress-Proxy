@@ -16,7 +16,7 @@
           "slug": "Lowercase letters, digits and underscores. It becomes the panel's address (a slug of music becomes /proxy-music) and can't be changed later.",
           "url": "Where Home Assistant reaches the app, such as http://music-assistant:8095 or http://192.168.1.20:8095.",
           "require_admin": "Leave on unless every Home Assistant user should be able to open this app.",
-          "persist_login": "Log in to the app once and stay logged in on every device. Everyone who can open the panel shares that login."
+          "persist_login": "Log in to the app once and stay logged in on every device. Each Home Assistant user keeps a login of their own."
         },
         "sections": {
           "advanced": {
@@ -31,7 +31,7 @@
               "keep_prefix": "Turn on for an app that is set up to live under that path. Most apps expect to be at /.",
               "verify_ssl": "Only matters for an https address. Turn off for an app with a self-signed certificate.",
               "headers": "Sent with every request to the app, one per line, such as Authorization: Bearer YOUR_TOKEN.",
-              "local_storage": "Written to the browser before the app loads, one per line, such as ma_access_token: YOUR_TOKEN. Anyone who can open the panel can read them."
+              "local_storage": "Written to the browser before the app loads, one per line, such as ma_access_token: YOUR_TOKEN. Anyone who can open the panel can read them. Home Assistant's own keys, such as hassTokens, can't be used."
             }
           },
           "login": {
@@ -63,7 +63,7 @@
         "data_description": {
           "url": "Where Home Assistant reaches the app, such as http://music-assistant:8095 or http://192.168.1.20:8095.",
           "require_admin": "Leave on unless every Home Assistant user should be able to open this app.",
-          "persist_login": "Log in to the app once and stay logged in on every device. Everyone who can open the panel shares that login."
+          "persist_login": "Log in to the app once and stay logged in on every device. Each Home Assistant user keeps a login of their own."
         },
         "sections": {
           "advanced": {
@@ -78,7 +78,7 @@
               "keep_prefix": "Turn on for an app that is set up to live under that path. Most apps expect to be at /.",
               "verify_ssl": "Only matters for an https address. Turn off for an app with a self-signed certificate.",
               "headers": "Sent with every request to the app, one per line, such as Authorization: Bearer YOUR_TOKEN.",
-              "local_storage": "Written to the browser before the app loads, one per line, such as ma_access_token: YOUR_TOKEN. Anyone who can open the panel can read them."
+              "local_storage": "Written to the browser before the app loads, one per line, such as ma_access_token: YOUR_TOKEN. Anyone who can open the panel can read them. Home Assistant's own keys, such as hassTokens, can't be used."
             }
           },
           "login": {
@@ -110,7 +110,9 @@
       "invalid_auth": "The app refused the username or password",
       "invalid_username": "The username can't contain a colon (:)",
       "missing_password": "Enter the app's password",
-      "not_esphome": "No ESPHome Device Builder answered at that address. For the older ESPHome dashboard, choose HTTP Basic."
+      "not_esphome": "No ESPHome Device Builder answered at that address. For the older ESPHome dashboard, choose HTTP Basic.",
+      "metadata_address": "This address leads to a cloud metadata service, which holds the credentials of the machine Home Assistant runs on. It can't be proxied.",
+      "reserved_local_storage": "A browser storage entry uses a key that Home Assistant itself uses, such as hassTokens. Use the key the app reads instead."
     },
     "abort": {
       "already_configured": "This app is already added"

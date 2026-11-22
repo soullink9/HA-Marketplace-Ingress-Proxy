@@ -56,9 +56,8 @@ The page was opened without its panel, or its session ran out:
 - After a Home Assistant restart, the panel gets a new session when it reconnects. If the app still shows this, reload
   the page.
 - A user who isn't an administrator gets this for an app with **Administrators only** on (they don't see its panel
-  either).
-- In a browser or app web view (such as the Lena wall display) that still holds the session cookie from an older Ingress
-  Proxy, update Ingress Proxy: it ignores that stale cookie and the panel deletes it.
+  either). So does a user who was deactivated, deleted, or lost their administrator rights while the page was open:
+  the proxy checks the user on every request.
 
 ## "This app can't be opened" in the panel
 
@@ -70,6 +69,20 @@ again.
 
 Home Assistant couldn't connect to the app: it's stopped, restarting, or its address changed. Check the app, then
 **Reconfigure** if the address changed.
+
+## "Ingress Proxy: ... tried to send the browser outside the app" (502)
+
+The app answered with a redirect that leads out of its own path on Home Assistant's address: to another site, or to
+another part of Home Assistant. The proxy refuses those (see
+[Privacy and Security](Privacy-and-Security.md#proxy-only-apps-you-trust)). Usually the app doesn't know where it
+lives: give it a base path (see the next section), or check it isn't redirecting to its own public address. An app
+whose login goes through another site (an OAuth sign-in page) can't be proxied this way.
+
+## "Ingress Proxy: this app has too many connections open" (503)
+
+The app has 100 requests or 25 websockets open through the proxy at once, usually because pages of it are open in
+many tabs or on many screens, or the page keeps opening websockets without closing them. Close some, and it works
+again within seconds.
 
 ## The panel is blank or unstyled
 
@@ -108,5 +121,6 @@ check the debug log for the websocket's close code.
 ## Live updates stop or the app says it's disconnected
 
 The app's websocket goes through the proxy too. Check the debug log for "Websocket closed" lines with close codes:
-`1001` is the browser leaving the page, other codes come from the app. If Home Assistant restarted, the app should
-reconnect on its own once the panel has its new session; reload the panel if it doesn't.
+`1001` is the browser leaving the page, `1009` a message bigger than the proxy's 16 MiB limit, other codes come from
+the app. If Home Assistant restarted, the app should reconnect on its own once the panel has its new session; reload
+the panel if it doesn't.

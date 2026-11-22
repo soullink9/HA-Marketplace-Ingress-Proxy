@@ -9,10 +9,10 @@ nothing to add to `configuration.yaml`.
 | --- | --- | --- |
 | Slug | | The app's part of every address: the panel is `/proxy-<slug>` and the app is served at `/api/ingress_proxy/<slug>/`. Lowercase letters, digits and underscores. Fixed once the app is added. |
 | Sidebar title | | The panel's name in the sidebar and its toolbar. |
-| App address | | Where Home Assistant reaches the app: `http://` or `https://`, a host, an optional port and an optional path (`http://zigbee2mqtt:8080`, `https://nas.lan:8443/app`). |
+| App address | | Where Home Assistant reaches the app: `http://` or `https://`, a host, an optional port and an optional path (`http://zigbee2mqtt:8080`, `https://nas.lan:8443/app`). Any address Home Assistant can reach works, except a cloud metadata service such as `169.254.169.254` ([why](Privacy-and-Security.md#which-addresses-an-app-can-have)). |
 | Sidebar icon | `mdi:application` | Any Material Design icon. |
 | Administrators only | on | Only Home Assistant administrators see the panel and get through the proxy. Turn off to let every Home Assistant user open the app. |
-| Remember the app's login in Home Assistant | on | The app's cookies are kept in Home Assistant instead of the browser. Log in to the app once and you're logged in everywhere, on every device. See [Privacy and Security](Privacy-and-Security.md#remembered-logins) for what that means for shared logins. |
+| Remember the app's login in Home Assistant | on | The app's cookies are kept in Home Assistant instead of the browser, for each Home Assistant user separately. Log in to the app once and you're logged in on every device you use. See [Privacy and Security](Privacy-and-Security.md#remembered-logins). |
 
 Under **Advanced**:
 
@@ -21,7 +21,7 @@ Under **Advanced**:
 | Keep the /api/ingress_proxy/slug path | off | Off: the app is sent requests as if it lived at `/` (`/api/ingress_proxy/music/settings` reaches the app as `/settings`). On: the app gets the full path. Turn on only for an app you've told it lives at `/api/ingress_proxy/<slug>` (a "base URL" or "base path" setting). |
 | Verify the app's SSL certificate | on | Only matters for an `https://` address. Turn off for an app with a self-signed certificate. |
 | Extra request headers | none | Sent with every request to the app, one `name: value` per line. For an app that accepts an API token in a header, this logs everyone in without the app's login page. |
-| Browser storage entries | none | Written to the browser's local storage before the app loads, one `key: value` per line. For an app that keeps its login there. |
+| Browser storage entries | none | Written to the browser's local storage before the app loads, one `key: value` per line. For an app that keeps its login there. Home Assistant's own keys, such as `hassTokens`, can't be used. |
 
 Under **Login**, for an app that asks for a username and password (leave it empty otherwise). **Password** and
 **How to log in** appear once a username is typed:

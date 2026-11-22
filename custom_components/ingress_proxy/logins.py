@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
-from .const import CHECK_TIMEOUT_SECONDS, LOGIN_ESPHOME
+from .const import CHECK_TIMEOUT_SECONDS, LOGIN_ESPHOME, LOGIN_WAIT_SECONDS
 from .rewrite import websocket_url
 
 if TYPE_CHECKING:
@@ -137,7 +137,8 @@ class UpstreamLogins:
         """The Authorization header value for a request to the app, or None if the proxy doesn't log in to it.
 
         For an ESPHome Device Builder this logs in first if there's no token yet, so it can raise what
-        async_esphome_login raises.
+        async_esphome_login raises. A request that waits longer than LOGIN_WAIT_SECONDS for another request's login
+        gives up with TimeoutError, so a page load against an app that hangs doesn't pile up waiting requests.
         """
         if not app.username:
             return None
@@ -146,7 +147,9 @@ class UpstreamLogins:
 
         # A page load starts many requests at once; the lock makes them wait for one login instead of each making one.
         lock = self._locks.setdefault(app.slug, asyncio.Lock())
-        async with lock:
+        async with asyncio.timeout(LOGIN_WAIT_SECONDS):
+            await lock.acquire()
+        try:
             if app.slug not in self._tokens:
                 refused = self._refused.get(app.slug)
                 if refused is not None and time.monotonic() - refused[0] < RETRY_REFUSED_LOGIN_SECONDS:
@@ -159,6 +162,8 @@ class UpstreamLogins:
                     raise
                 self._refused.pop(app.slug, None)
                 _LOGGER.debug("Logged in to %s", app.slug)
+        finally:
+            lock.release()
         token = self._tokens[app.slug]
         return None if token is None else f"Bearer {token}"
 

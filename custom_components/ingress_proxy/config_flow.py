@@ -24,7 +24,7 @@ from homeassistant.helpers.selector import (
 )
 import probatio
 
-from .client import async_get_client
+from .client import async_get_client, async_reaches_metadata_service
 from .const import (
     CHECK_TIMEOUT_SECONDS,
     CONF_HEADERS,
@@ -42,6 +42,7 @@ from .const import (
     LOGIN_BASIC,
     LOGIN_ESPHOME,
     LOGIN_METHODS,
+    RESERVED_LOCAL_STORAGE_KEYS,
 )
 from .logins import LoginRefused, NotEsphome, async_esphome_login, basic_authorization
 from .models import ProxiedApp
@@ -120,7 +121,11 @@ def _form_values(data: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def clean_url(raw: str) -> str | None:
-    """The app's address without spaces or a trailing "/", or None if it isn't a plain http(s) address."""
+    """The app's address without spaces or a trailing "/", or None if it isn't a plain http(s) address.
+
+    Any host is allowed, including private and loopback addresses: apps on your own network, or on Home Assistant's
+    own host, are what the proxy is for. Only cloud metadata services are refused, by _async_form.
+    """
     url = raw.strip().rstrip("/")
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -163,7 +168,11 @@ def clean_headers(raw: Any) -> dict[str, str] | None:
 
 
 def clean_local_storage(raw: Any) -> dict[str, str] | None:
-    """Browser storage entries typed as a YAML mapping of key: value, or None if one isn't plain text."""
+    """Browser storage entries typed as a YAML mapping of key: value, or None if one isn't plain text.
+
+    Keys are kept exactly as typed, since the app reads them by name. Home Assistant's own keys are checked
+    separately (reserved_local_storage_keys), so the form can say which one is the problem.
+    """
     if raw in (None, ""):
         return {}
     if not isinstance(raw, Mapping):
@@ -174,6 +183,11 @@ def clean_local_storage(raw: Any) -> dict[str, str] | None:
             return None
         entries[key] = str(value)
     return entries
+
+
+def reserved_local_storage_keys(entries: Mapping[str, str]) -> list[str]:
+    """The keys among browser storage entries that Home Assistant's own frontend uses, such as its login."""
+    return sorted(key for key in entries if key in RESERVED_LOCAL_STORAGE_KEYS)
 
 
 def _tidy_login(login: Mapping[str, Any], entry: ConfigEntry | None) -> tuple[str, str, str, str | None]:
@@ -219,6 +233,8 @@ class IngressProxyConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             data, errors = self._tidy(user_input, entry)
+            if not errors and await async_reaches_metadata_service(self.hass, data[CONF_URL]):
+                errors[CONF_URL] = "metadata_address"
             if not errors:
                 errors = await self._async_check_reachable(data)
             if not errors:
@@ -282,6 +298,8 @@ class IngressProxyConfigFlow(ConfigFlow, domain=DOMAIN):
         local_storage = clean_local_storage(advanced.get(CONF_LOCAL_STORAGE))
         if local_storage is None:
             errors["base"] = "invalid_local_storage"
+        elif reserved_local_storage_keys(local_storage):
+            errors["base"] = "reserved_local_storage"
         data[CONF_LOCAL_STORAGE] = local_storage or {}
 
         username, password, login_method, login_error = _tidy_login(user_input.get(LOGIN, {}), entry)

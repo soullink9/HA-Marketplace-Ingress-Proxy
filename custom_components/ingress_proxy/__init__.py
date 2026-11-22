@@ -19,16 +19,19 @@ Set-up overview (see docs/Development.md for the full tour):
 
 from pathlib import Path
 
+from homeassistant.auth import EVENT_USER_REMOVED
 from homeassistant.components import frontend, panel_custom
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import async_get_integration
 
 from . import websocket
+from .client import async_reaches_metadata_service
 from .const import (
     CONF_SLUG,
     COOKIE_STORE_KEY,
@@ -36,6 +39,7 @@ from .const import (
     DOMAIN,
     PANEL_SCRIPT,
     PANEL_URL_PREFIX,
+    SHARED_COOKIE_STORE_KEY,
     STATIC_URL,
 )
 from .cookies import UpstreamCookieJar
@@ -48,10 +52,21 @@ type IngressProxyConfigEntry = ConfigEntry[ProxiedApp]
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Start what all the apps share: the proxy, the panel script, the session command and the saved cookies."""
+    # Before 1.5.0 an app's kept cookies were shared by every user who could open it. Nobody can tell whose login
+    # they hold, so they're deleted rather than handed to anyone: each user logs in to the app once more.
+    await Store(hass, COOKIE_STORE_VERSION, SHARED_COOKIE_STORE_KEY).async_remove()
     cookie_jar = UpstreamCookieJar(Store(hass, COOKIE_STORE_VERSION, COOKIE_STORE_KEY))
     await cookie_jar.async_load()
     data = IngressProxyData(cookie_jar=cookie_jar)
     hass.data[DATA_KEY] = data
+
+    @callback
+    def forget_user(event: Event) -> None:
+        """A Home Assistant user was deleted: end their sessions and delete the app logins kept for them."""
+        data.sessions.forget_user(event.data["user_id"])
+        data.cookie_jar.forget_user(event.data["user_id"])
+
+    hass.bus.async_listen(EVENT_USER_REMOVED, forget_user)
 
     hass.http.register_view(IngressProxyView(hass, data))
     await hass.http.async_register_static_paths(
@@ -64,6 +79,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: IngressProxyConfigEntry) -> bool:
     """Add one app's sidebar panel and let the proxy serve it."""
     app = ProxiedApp.from_entry_data(entry.data)
+    if await async_reaches_metadata_service(hass, app.url):
+        # The setup form refuses these addresses; this catches a name whose address has changed since.
+        raise ConfigEntryError(f"{app.url} leads to a cloud metadata service, which Ingress Proxy doesn't proxy")
     entry.runtime_data = app
     data = hass.data[DATA_KEY]
     data.apps[app.slug] = app
