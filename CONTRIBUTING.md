@@ -66,7 +66,7 @@ python3 scripts/build_package.py
 ```
 
 These need Python 3.14, the Python Home Assistant 2026.11 runs on (the code uses syntax older Pythons don't have), and
-Node 20 or newer to check the panel script parses. Gitea's runner runs all of these on every push
+Node 26 (the Node LTS the workflows use) to check the panel script parses. Gitea's runner runs all of these on every push
 (`.gitea/workflows/test.yml`); on GitHub the same checks run plus Home Assistant's `hassfest` and the Marketplace's
 own checks, which come from GitHub and can only run there. `test_release.py` checks the release scripts (any change
 to `scripts/` or the release workflows), and `build_package.py` builds `dist/ingress_proxy.zip` and checks it
@@ -187,7 +187,7 @@ https://github.com/hacs/action.git refs/heads/main`, say), replace the hash and 
 `chore: update the CI actions`. The release workflow has no permissions by default; only its release job may write.
 
 The Gitea workflows use no actions (`actions/checkout` and the like download from GitHub): each job runs in a plain
-image from Docker Hub (`python:3.14-bookworm`, and `node:20-bookworm` for the panel script) and fetches the code from
+image from Docker Hub (`python:3.14-trixie`, and `node:26-trixie` for the panel script) and fetches the code from
 Gitea with git, so testing and releasing keep working when GitHub can't be reached. Only `ruff` comes from PyPI. When
 the runner's jobs can't reach Gitea at its public address (a runner on the same Docker network as Gitea, say), set an
 Actions variable `GITEA_INTERNAL_URL` to the address they can reach (`http://gitea-server:3000`); both workflows and

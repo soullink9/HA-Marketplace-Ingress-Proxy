@@ -35,7 +35,7 @@ jobs:
     # Home Assistant 2026.11 runs on Python 3.14 and supports nothing older, so that's what the tests run on
     runs-on: ubuntu-latest
     container:
-      image: python:3.14-bookworm
+      image: python:3.14-trixie
     steps:
       - name: Get the code
         env:
@@ -67,7 +67,7 @@ jobs:
   panel:
     runs-on: ubuntu-latest
     container:
-      image: node:20-bookworm
+      image: node:26-trixie
     steps:
       - name: Get the code
         env:
@@ -89,7 +89,7 @@ jobs:
     needs: ["tests", "panel"]
     runs-on: ubuntu-latest
     container:
-      image: python:3.14-bookworm
+      image: python:3.14-trixie
     steps:
       - name: Get the code
         env:
