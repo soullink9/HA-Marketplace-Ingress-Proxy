@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.1 (2026-11-25)
+
+Maintenance: nothing changes in Home Assistant. The integration still depends on nothing outside Home Assistant
+2026.11.
+
+- The checks and releases run on the latest tools: GitHub's `actions/checkout` 7.0.1, `actions/setup-python` 7.1.0
+  and `actions/setup-node` 7.1.0, the latest `hassfest`, and on Gitea the `python:3.14-trixie` and `node:26-trixie`
+  images (Debian 13).
+- The panel script is checked on Node 26, the current LTS, instead of Node 20, which reached its end of life.
+
 ## 1.5.0 (2026-11-22)
 
 Security hardening, from an outside security review. **Read before updating:** remembered app logins are now kept
